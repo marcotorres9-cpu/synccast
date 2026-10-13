@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: synccast-sync
+    runtime: node
+    plan: free
+    region: ohio
+    rootDir: mini-services/sync-service
+    buildCommand: bun install
+    startCommand: bun run index.ts
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        fromRender: true

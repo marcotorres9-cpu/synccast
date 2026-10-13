@@ -1,0 +1,802 @@
+'use client'
+
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useControllerSocket } from '@/hooks/use-sync-socket'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Slider } from '@/components/ui/slider'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
+import {
+  Play, Pause, Square, SkipForward, SkipBack, Volume2, VolumeX,
+  Upload, Music, Video, Monitor, Trash2, ListMusic, Tv, Settings,
+  Plus, Wifi, Loader2, CheckCircle2, AlertCircle, Smartphone,
+  Volume1, Cast, X, Pencil, Server
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { apiUrl, getServerUrl, setServerUrl } from '@/lib/server-url'
+import { notifyServerUrlChanged } from '@/hooks/use-sync-socket'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+
+interface MediaFile {
+  id: string
+  name: string
+  url: string
+  type: string
+  size: number
+  duration?: number
+  createdAt?: string
+}
+
+export function Controller() {
+  const { isConnected, tvs, playback, sendCommand } = useControllerSocket()
+  const [tab, setTab] = useState('player')
+  const [mediaFiles, setMediaFiles] = useState<MediaFile[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [selectedMedia, setSelectedMedia] = useState<MediaFile[]>([])
+  const [masterVolume, setMasterVolume] = useState(80)
+  const [tvVolumes, setTvVolumes] = useState<Record<string, number>>({})
+  const [editingTvName, setEditingTvName] = useState<string | null>(null)
+  const [newTvName, setNewTvName] = useState('')
+  const [showServerDialog, setShowServerDialog] = useState(false)
+  const [serverUrlInput, setServerUrlInput] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // --------------------------------------------------------
+  // Fetch media files
+  // --------------------------------------------------------
+  const fetchMedia = useCallback(async () => {
+    try {
+      const res = await fetch(apiUrl('/api/media'))
+      const data = await res.json()
+      if (data.files) setMediaFiles(data.files)
+    } catch (e) {
+      console.error('Failed to fetch media:', e)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchMedia()
+  }, [fetchMedia])
+
+  // Sync TV volumes
+  useEffect(() => {
+    if (tvs.length > 0) {
+      const newVols: Record<string, number> = {}
+      tvs.forEach((tv) => {
+        newVols[tv.tvId] = tvVolumes[tv.tvId] ?? tv.volume
+      })
+      setTvVolumes(newVols)
+    }
+     
+  }, [tvs.length])
+
+  // --------------------------------------------------------
+  // Upload files
+  // --------------------------------------------------------
+  const handleUpload = async (files: FileList | null, type: 'video' | 'audio') => {
+    if (!files || files.length === 0) return
+    setUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('type', type)
+      for (const file of Array.from(files)) {
+        formData.append('files', file)
+      }
+      const res = await fetch(apiUrl('/api/upload'), {
+        method: 'POST',
+        body: formData,
+      })
+      const data = await res.json()
+      if (data.files) {
+        toast.success(`${data.files.length} archivo(s) subido(s) correctamente`)
+        await fetchMedia()
+      } else {
+        toast.error('Error al subir archivos')
+      }
+    } catch (e: any) {
+      toast.error('Error: ' + e.message)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  // --------------------------------------------------------
+  // Delete media
+  // --------------------------------------------------------
+  const handleDeleteMedia = async (id: string) => {
+    try {
+      await fetch(apiUrl(`/api/media?id=${id}`), { method: 'DELETE' })
+      await fetchMedia()
+      toast.success('Archivo eliminado')
+    } catch (e: any) {
+      toast.error('Error: ' + e.message)
+    }
+  }
+
+  // --------------------------------------------------------
+  // Start playback
+  // --------------------------------------------------------
+  const startPlayback = (media: MediaFile[], startIndex = 0) => {
+    if (media.length === 0) {
+      toast.error('Selecciona al menos un archivo')
+      return
+    }
+    const playlist = media.map((m) => ({
+      id: m.id,
+      name: m.name,
+      url: m.url,
+      type: m.type,
+      duration: m.duration || 0,
+    }))
+    sendCommand('load-playlist', {
+      playlist,
+      playlistId: `temp_${Date.now()}`,
+      startIndex,
+    })
+    setTimeout(() => sendCommand('play', { position: 0 }), 300)
+    setTab('player')
+    toast.success(`Reproduciendo "${playlist[startIndex].name}" en ${tvs.length} TV(s)`)
+  }
+
+  // --------------------------------------------------------
+  // Play/pause toggle
+  // --------------------------------------------------------
+  const togglePlayPause = () => {
+    if (playback?.isPlaying) {
+      sendCommand('pause', { position: playback.position })
+    } else {
+      sendCommand('play', { position: playback?.position || 0 })
+    }
+  }
+
+  // --------------------------------------------------------
+  // Seek
+  // --------------------------------------------------------
+  const handleSeek = (value: number[]) => {
+    sendCommand('seek', { position: value[0] })
+  }
+
+  // --------------------------------------------------------
+  // Volume control
+  // --------------------------------------------------------
+  const handleMasterVolume = (value: number[]) => {
+    const v = value[0]
+    setMasterVolume(v)
+    sendCommand('set-volume', { volume: v })
+  }
+
+  const handleTvVolume = (tvId: string, value: number[]) => {
+    const v = value[0]
+    setTvVolumes((prev) => ({ ...prev, [tvId]: v }))
+    sendCommand('set-volume', { tvId, volume: v })
+  }
+
+  const handleRenameTv = (tvId: string, name: string) => {
+    sendCommand('rename-tv', { tvId, name })
+    setEditingTvName(null)
+    toast.success('TV renombrado')
+  }
+
+  const handleKickTv = (tvId: string) => {
+    sendCommand('kick-tv', { tvId })
+    toast.success('TV desconectado')
+  }
+
+  const formatTime = (s: number) => {
+    if (!s || isNaN(s)) return '0:00'
+    const m = Math.floor(s / 60)
+    const sec = Math.floor(s % 60)
+    return `${m}:${sec.toString().padStart(2, '0')}`
+  }
+
+  const formatSize = (b: number) => {
+    if (b < 1024) return `${b} B`
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+    return `${(b / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  const videoFiles = mediaFiles.filter((f) => f.type === 'video')
+  const audioFiles = mediaFiles.filter((f) => f.type === 'audio')
+  const onlineTvs = tvs.filter((t) => t.isOnline)
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      {/* Header */}
+      <header className="glass sticky top-0 z-50 px-4 py-3 border-b border-white/5">
+        <div className="flex items-center justify-between max-w-5xl mx-auto">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center glow">
+              <Cast className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-white">SyncCast</h1>
+              <p className="text-xs text-white/60 flex items-center gap-1.5">
+                <Wifi className={`w-3 h-3 ${isConnected ? 'text-green-400' : 'text-amber-400'}`} />
+                {isConnected ? 'Conectado' : 'Reconectando...'} · {onlineTvs.length} TV(s)
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setServerUrlInput(getServerUrl())
+                setShowServerDialog(true)
+              }}
+              className="text-white/70 hover:text-white"
+              title="Configurar servidor"
+            >
+              <Settings className="w-4 h-4" />
+            </Button>
+            <Badge variant="outline" className="glass border-primary/30 text-primary">
+              <Smartphone className="w-3 h-3 mr-1" />
+              Controlador
+            </Badge>
+          </div>
+        </div>
+      </header>
+
+      {/* Main content */}
+      <main className="flex-1 max-w-5xl w-full mx-auto px-4 py-6 pb-24">
+        <Tabs value={tab} onValueChange={setTab} className="w-full">
+          <TabsList className="grid grid-cols-4 w-full glass">
+            <TabsTrigger value="player" className="data-[state=active]:bg-primary/20">
+              <Play className="w-4 h-4 mr-1.5" /> Reproductor
+            </TabsTrigger>
+            <TabsTrigger value="videos" className="data-[state=active]:bg-primary/20">
+              <Video className="w-4 h-4 mr-1.5" /> Videos
+            </TabsTrigger>
+            <TabsTrigger value="music" className="data-[state=active]:bg-primary/20">
+              <Music className="w-4 h-4 mr-1.5" /> Música
+            </TabsTrigger>
+            <TabsTrigger value="tvs" className="data-[state=active]:bg-primary/20">
+              <Tv className="w-4 h-4 mr-1.5" /> TVs ({onlineTvs.length})
+            </TabsTrigger>
+          </TabsList>
+
+          {/* PLAYER TAB */}
+          <TabsContent value="player" className="space-y-4 mt-4">
+            <Card className="glass-card p-6">
+              {/* Now Playing */}
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-20 h-20 rounded-lg bg-gradient-to-br from-primary/40 to-purple-700/40 flex items-center justify-center flex-shrink-0">
+                  {playback?.mediaType === 'audio' ? (
+                    <Music className="w-8 h-8 text-primary" />
+                  ) : playback?.mediaType === 'video' ? (
+                    <Video className="w-8 h-8 text-primary" />
+                  ) : (
+                    <Play className="w-8 h-8 text-white/40" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-white/50 uppercase tracking-wider mb-1">
+                    {playback?.isPlaying ? 'Reproduciendo' : 'En pausa'}
+                  </p>
+                  <h3 className="text-xl font-bold text-white truncate">
+                    {playback?.mediaName || 'Ningún medio seleccionado'}
+                  </h3>
+                  <p className="text-sm text-white/60 mt-1">
+                    {playback?.playlist?.length
+                      ? `${playback.playlistIndex + 1} de ${playback.playlist.length} · ${onlineTvs.length} TV(s) sincronizando`
+                      : 'Selecciona videos o música para comenzar'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Progress bar */}
+              {playback && playback.duration > 0 && (
+                <div className="mb-6">
+                  <Slider
+                    value={[playback.position]}
+                    max={playback.duration}
+                    step={0.1}
+                    onValueChange={handleSeek}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-white/60 mt-2">
+                    <span>{formatTime(playback.position)}</span>
+                    <span>{formatTime(playback.duration)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Playback controls */}
+              <div className="flex items-center justify-center gap-4">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-white hover:bg-white/10"
+                  onClick={() => sendCommand('previous', {})}
+                  disabled={!playback || playback.playlistIndex === 0}
+                >
+                  <SkipBack className="w-6 h-6" />
+                </Button>
+                <Button
+                  size="lg"
+                  className="w-16 h-16 rounded-full bg-primary hover:bg-primary/90 glow"
+                  onClick={togglePlayPause}
+                  disabled={!playback?.mediaUrl}
+                >
+                  {playback?.isPlaying ? (
+                    <Pause className="w-7 h-7" />
+                  ) : (
+                    <Play className="w-7 h-7 ml-1" />
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-white hover:bg-white/10"
+                  onClick={() => sendCommand('next', {})}
+                  disabled={!playback || playback.playlistIndex >= (playback.playlist?.length || 0) - 1}
+                >
+                  <SkipForward className="w-6 h-6" />
+                </Button>
+              </div>
+              <div className="flex items-center justify-center gap-2 mt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => sendCommand('stop', {})}
+                  disabled={!playback?.mediaUrl}
+                  className="glass border-white/10"
+                >
+                  <Square className="w-3 h-3 mr-1.5" /> Detener
+                </Button>
+              </div>
+
+              {/* Master volume */}
+              <Separator className="my-6 bg-white/10" />
+              <div>
+                <Label className="text-sm text-white/80 flex items-center gap-2 mb-3">
+                  <Volume2 className="w-4 h-4 text-primary" />
+                  Volumen Maestro
+                </Label>
+                <div className="flex items-center gap-3">
+                  <Volume1 className="w-4 h-4 text-white/40" />
+                  <Slider
+                    value={[masterVolume]}
+                    max={100}
+                    step={1}
+                    onValueChange={handleMasterVolume}
+                    className="flex-1"
+                  />
+                  <span className="text-sm text-white/80 w-10 text-right">{masterVolume}%</span>
+                </div>
+              </div>
+            </Card>
+
+            {/* Quick actions */}
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                variant="outline"
+                className="glass border-white/10 h-20 flex-col gap-1"
+                onClick={() => setTab('videos')}
+              >
+                <Video className="w-6 h-6 text-primary" />
+                <span className="text-xs">Subir Videos</span>
+              </Button>
+              <Button
+                variant="outline"
+                className="glass border-white/10 h-20 flex-col gap-1"
+                onClick={() => setTab('music')}
+              >
+                <Music className="w-6 h-6 text-primary" />
+                <span className="text-xs">Subir Música</span>
+              </Button>
+            </div>
+          </TabsContent>
+
+          {/* VIDEOS TAB */}
+          <TabsContent value="videos" className="space-y-4 mt-4">
+            <Card className="glass-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <Label className="text-base font-semibold text-white flex items-center gap-2">
+                  <Video className="w-4 h-4 text-primary" />
+                  Subir Videos
+                </Label>
+                <Button
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                >
+                  {uploading ? (
+                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  ) : (
+                    <Upload className="w-4 h-4 mr-1" />
+                  )}
+                  Subir
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="video/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => handleUpload(e.target.files, 'video')}
+                />
+              </div>
+              <p className="text-xs text-white/50">
+                Formatos soportados: MP4, WebM, MKV, MOV
+              </p>
+            </Card>
+
+            <Card className="glass-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <Label className="text-base font-semibold text-white">
+                  Biblioteca de Videos ({videoFiles.length})
+                </Label>
+                {selectedMedia.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={() => startPlayback(selectedMedia)}
+                    className="bg-primary glow"
+                  >
+                    <Cast className="w-4 h-4 mr-1" />
+                    Reproducir en {onlineTvs.length} TV(s)
+                  </Button>
+                )}
+              </div>
+              <ScrollArea className="h-96 pr-2">
+                <div className="space-y-2">
+                  {videoFiles.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Video className="w-12 h-12 text-white/20 mx-auto mb-3" />
+                      <p className="text-white/40">No hay videos subidos</p>
+                      <p className="text-xs text-white/30 mt-1">Sube tu primer video para comenzar</p>
+                    </div>
+                  ) : (
+                    videoFiles.map((file) => (
+                      <div
+                        key={file.id}
+                        className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                          selectedMedia.find((m) => m.id === file.id)
+                            ? 'glass border-primary bg-primary/10'
+                            : 'glass border-white/5 hover:border-white/20'
+                        }`}
+                        onClick={() => {
+                          setSelectedMedia((prev) =>
+                            prev.find((m) => m.id === file.id)
+                              ? prev.filter((m) => m.id !== file.id)
+                              : [...prev, file]
+                          )
+                        }}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded bg-gradient-to-br from-primary/40 to-purple-700/30 flex items-center justify-center flex-shrink-0">
+                            <Video className="w-5 h-5 text-primary" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-white truncate">{file.name}</p>
+                            <p className="text-xs text-white/50">{formatSize(file.size)}</p>
+                          </div>
+                          {selectedMedia.find((m) => m.id === file.id) && (
+                            <CheckCircle2 className="w-5 h-5 text-primary flex-shrink-0" />
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-white/40 hover:text-destructive hover:bg-destructive/10 h-8 w-8"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDeleteMedia(file.id)
+                            }}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </ScrollArea>
+              {selectedMedia.length > 1 && (
+                <p className="text-xs text-white/60 mt-3 flex items-center gap-1.5">
+                  <ListMusic className="w-3 h-3" />
+                  {selectedMedia.length} videos seleccionados - se reproducirán en orden
+                </p>
+              )}
+            </Card>
+          </TabsContent>
+
+          {/* MUSIC TAB */}
+          <TabsContent value="music" className="space-y-4 mt-4">
+            <Card className="glass-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <Label className="text-base font-semibold text-white flex items-center gap-2">
+                  <Music className="w-4 h-4 text-primary" />
+                  Subir Música
+                </Label>
+                <Button
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                >
+                  {uploading ? (
+                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  ) : (
+                    <Upload className="w-4 h-4 mr-1" />
+                  )}
+                  Subir
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="audio/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => handleUpload(e.target.files, 'audio')}
+                />
+              </div>
+              <p className="text-xs text-white/50">
+                Formatos soportados: MP3, WAV, OGG, M4A, FLAC
+              </p>
+            </Card>
+
+            <Card className="glass-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <Label className="text-base font-semibold text-white">
+                  Biblioteca de Música ({audioFiles.length})
+                </Label>
+                {selectedMedia.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={() => startPlayback(selectedMedia)}
+                    className="bg-primary glow"
+                  >
+                    <Cast className="w-4 h-4 mr-1" />
+                    Reproducir en {onlineTvs.length} TV(s)
+                  </Button>
+                )}
+              </div>
+              <ScrollArea className="h-96 pr-2">
+                <div className="space-y-2">
+                  {audioFiles.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Music className="w-12 h-12 text-white/20 mx-auto mb-3" />
+                      <p className="text-white/40">No hay música subida</p>
+                      <p className="text-xs text-white/30 mt-1">Sube tu primera canción para comenzar</p>
+                    </div>
+                  ) : (
+                    audioFiles.map((file, idx) => (
+                      <div
+                        key={file.id}
+                        className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                          selectedMedia.find((m) => m.id === file.id)
+                            ? 'glass border-primary bg-primary/10'
+                            : 'glass border-white/5 hover:border-white/20'
+                        }`}
+                        onClick={() => {
+                          setSelectedMedia((prev) =>
+                            prev.find((m) => m.id === file.id)
+                              ? prev.filter((m) => m.id !== file.id)
+                              : [...prev, file]
+                          )
+                        }}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded bg-gradient-to-br from-purple-500/40 to-pink-500/30 flex items-center justify-center flex-shrink-0">
+                            <span className="text-xs text-white/80">{idx + 1}</span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-white truncate">{file.name}</p>
+                            <p className="text-xs text-white/50">{formatSize(file.size)}</p>
+                          </div>
+                          {selectedMedia.find((m) => m.id === file.id) && (
+                            <CheckCircle2 className="w-5 h-5 text-primary flex-shrink-0" />
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-white/40 hover:text-destructive hover:bg-destructive/10 h-8 w-8"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDeleteMedia(file.id)
+                            }}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </ScrollArea>
+              {selectedMedia.length > 1 && (
+                <p className="text-xs text-white/60 mt-3 flex items-center gap-1.5">
+                  <ListMusic className="w-3 h-3" />
+                  {selectedMedia.length} canciones - se reproducirán como lista de reproducción
+                </p>
+              )}
+            </Card>
+          </TabsContent>
+
+          {/* TVS TAB */}
+          <TabsContent value="tvs" className="space-y-4 mt-4">
+            <Card className="glass-card p-4">
+              <div className="flex items-center justify-between mb-4">
+                <Label className="text-base font-semibold text-white flex items-center gap-2">
+                  <Tv className="w-4 h-4 text-primary" />
+                  TVs Conectados ({onlineTvs.length})
+                </Label>
+                <Button variant="outline" size="sm" className="glass border-white/10" onClick={() => setTab('player')}>
+                  <Cast className="w-3 h-3 mr-1.5" /> Ir a Control
+                </Button>
+              </div>
+
+              {tvs.length === 0 ? (
+                <div className="text-center py-12">
+                  <Monitor className="w-12 h-12 text-white/20 mx-auto mb-3" />
+                  <p className="text-white/40">No hay TVs conectados</p>
+                  <p className="text-xs text-white/30 mt-1">
+                    Abre la URL de este sitio en el navegador del TV para registrarlo
+                  </p>
+                </div>
+              ) : (
+                <ScrollArea className="max-h-[60vh] pr-2">
+                  <div className="space-y-3">
+                    {tvs.map((tv) => (
+                      <div key={tv.tvId} className="glass border border-white/5 rounded-lg p-4 hover:border-white/20 transition-all">
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className={`w-3 h-3 rounded-full ${tv.isOnline ? 'bg-green-400 animate-pulse-live' : 'bg-red-400'}`} />
+                          <Monitor className="w-5 h-5 text-primary" />
+                          {editingTvName === tv.tvId ? (
+                            <div className="flex items-center gap-2 flex-1">
+                              <Input
+                                value={newTvName}
+                                onChange={(e) => setNewTvName(e.target.value)}
+                                className="glass border-white/10 h-8"
+                                autoFocus
+                              />
+                              <Button size="sm" onClick={() => handleRenameTv(tv.tvId, newTvName || tv.name)}>
+                                <CheckCircle2 className="w-3 h-3" />
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={() => setEditingTvName(null)}>
+                                <X className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex-1">
+                              <p className="font-medium text-white">{tv.name}</p>
+                              <p className="text-xs text-white/50">
+                                {tv.isOnline ? 'En línea' : 'Desconectado'} · Volumen: {tv.volume}%
+                              </p>
+                            </div>
+                          )}
+                          {!editingTvName && (
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-white/40 hover:text-white"
+                                onClick={() => {
+                                  setEditingTvName(tv.tvId)
+                                  setNewTvName(tv.name)
+                                }}
+                              >
+                                <Pencil className="w-3 h-3" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-white/40 hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => handleKickTv(tv.tvId)}
+                              >
+                                <X className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+
+                        {tv.isOnline && (
+                          <div className="flex items-center gap-3">
+                            <VolumeX className="w-4 h-4 text-white/40 flex-shrink-0" />
+                            <Slider
+                              value={[tvVolumes[tv.tvId] ?? tv.volume]}
+                              max={100}
+                              step={1}
+                              onValueChange={(v) => handleTvVolume(tv.tvId, v)}
+                              className="flex-1"
+                            />
+                            <Volume2 className="w-4 h-4 text-primary flex-shrink-0" />
+                            <span className="text-xs text-white/70 w-10 text-right">
+                              {tvVolumes[tv.tvId] ?? tv.volume}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+            </Card>
+
+            {/* Master volume */}
+            <Card className="glass-card p-4">
+              <Label className="text-base font-semibold text-white flex items-center gap-2 mb-3">
+                <Settings className="w-4 h-4 text-primary" />
+                Volumen Global
+              </Label>
+              <div className="flex items-center gap-3">
+                <VolumeX className="w-5 h-5 text-white/40" />
+                <Slider
+                  value={[masterVolume]}
+                  max={100}
+                  step={1}
+                  onValueChange={handleMasterVolume}
+                  className="flex-1"
+                />
+                <Volume2 className="w-5 h-5 text-primary" />
+                <span className="text-sm text-white/80 w-10 text-right">{masterVolume}%</span>
+              </div>
+              <p className="text-xs text-white/50 mt-2">
+                Aplica a todos los TVs conectados
+              </p>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </main>
+
+      {/* Footer */}
+      <footer className="glass border-t border-white/5 px-4 py-3 mt-auto">
+        <p className="text-xs text-white/40 text-center">
+          SyncCast · Funciona en red WiFi local · Instalable como app en Android
+        </p>
+      </footer>
+
+      {/* Server config dialog */}
+      <Dialog open={showServerDialog} onOpenChange={setShowServerDialog}>
+        <DialogContent className="glass-card border-white/10 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-white">
+              <Server className="w-5 h-5 text-primary" />
+              Configurar Servidor
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-white/60">
+              Ingresa la URL del servidor SyncCast (tu PC, Raspberry Pi o Vercel).
+              Todos los TVs y este controlador deben apuntar al mismo servidor.
+            </p>
+            <Input
+              value={serverUrlInput}
+              onChange={(e) => setServerUrlInput(e.target.value)}
+              placeholder="http://192.168.1.100:81"
+              className="glass border-white/10"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+            <p className="text-xs text-white/40">
+              URL actual: <code className="bg-white/5 px-1 py-0.5 rounded">{getServerUrl() || '(usando origen actual)'}</code>
+            </p>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowServerDialog(false)} className="glass border-white/10">
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => {
+                setServerUrl(serverUrlInput)
+                notifyServerUrlChanged()
+                setShowServerDialog(false)
+                toast.success('Servidor actualizado')
+                setTimeout(() => fetchMedia(), 500)
+              }}
+              className="bg-primary"
+            >
+              Guardar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
