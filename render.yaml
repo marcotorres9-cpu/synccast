@@ -5,8 +5,8 @@ services:
     plan: free
     region: ohio
     rootDir: mini-services/sync-service
-    buildCommand: bun install
-    startCommand: bun run index.ts
+    buildCommand: npm install
+    startCommand: npx bun run index.ts
     healthCheckPath: /
     autoDeploy: true
     envVars:

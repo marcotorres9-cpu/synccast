@@ -412,7 +412,7 @@ io.on('connection', (socket: Socket) => {
   })
 })
 
-const PORT = 3003
+const PORT = parseInt(process.env.PORT || '3003', 10)
 httpServer.listen(PORT, () => {
   console.log(`[SYNC-SERVICE] WebSocket server running on port ${PORT}`)
 })
