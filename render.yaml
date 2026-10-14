@@ -5,7 +5,7 @@ services:
     plan: free
     region: ohio
     rootDir: mini-services/sync-service
-    buildCommand: npm install
+    buildCommand: 'true'
     startCommand: node index.js
     healthCheckPath: /
     autoDeploy: true

@@ -1,23 +1,16 @@
-const { createServer } = require('http')
-const { Server } = require('socket.io')
+// SyncCast WebSocket Service - Zero dependencies, native Node.js
+// Uses Node.js built-in http and a minimal Socket.io-compatible implementation
+// optimized for Render free tier
 
-const httpServer = createServer()
-const io = new Server(httpServer, {
-  path: '/',
-  cors: { origin: '*', methods: ['GET', 'POST'] },
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  maxHttpBufferSize: 5 * 1024 * 1024,
-})
+const http = require('http')
+const crypto = require('crypto')
 
 // ============================================================
-// Types (as JSDoc comments for clarity)
+// In-memory state
 // ============================================================
-
-/** @type {Map<string, {socketId: string, tvId: string, name: string, isOnline: boolean, volume: number, lastSeen: number}>} */
-const tvs = new Map()
-/** @type {Map<string, {socketId: string, name: string}>} */
-const controllers = new Map()
+const tvs = new Map()  // socketId -> { tvId, name, isOnline, volume, lastSeen }
+const controllers = new Map()  // socketId -> { name }
+const wsClients = new Map()  // socketId -> { ws, role, tvId }
 
 let playbackState = {
   mediaId: null,
@@ -36,327 +29,456 @@ let playbackState = {
 
 function getTVsList() {
   return Array.from(tvs.values()).map((tv) => ({
-    tvId: tv.tvId,
-    name: tv.name,
-    isOnline: tv.isOnline,
-    volume: tv.volume,
-    lastSeen: tv.lastSeen,
+    tvId: tv.tvId, name: tv.name, isOnline: tv.isOnline,
+    volume: tv.volume, lastSeen: tv.lastSeen,
   }))
 }
 
 function broadcastTVsList() {
-  io.to('controllers').emit('tvs-list', { tvs: getTVsList() })
+  broadcastToRole('controllers', JSON.stringify({ event: 'tvs-list', data: { tvs: getTVsList() } }))
 }
 
 function broadcastPlaybackState() {
-  io.to('controllers').emit('playback-state', playbackState)
+  broadcastToRole('controllers', JSON.stringify({ event: 'playback-state', data: playbackState }))
 }
 
-function getServerTime() {
-  return Date.now()
-}
-
-io.on('connection', (socket) => {
-  console.log(`[CONNECT] ${socket.id}`)
-
-  // Clock sync (NTP-like)
-  socket.on('sync-ping', (data) => {
-    const t2 = getServerTime()
-    socket.emit('sync-pong', { t1: data.t1, t2, t3: getServerTime() })
-  })
-
-  // Register as TV
-  socket.on('register-tv', (data) => {
-    socket.join('tvs')
-    socket.data.role = 'tv'
-    socket.data.tvId = data.tvId
-
-    const tv = {
-      socketId: socket.id,
-      tvId: data.tvId,
-      name: data.name,
-      isOnline: true,
-      volume: 80,
-      lastSeen: Date.now(),
+function broadcastToRole(role, message) {
+  for (const [sid, client] of wsClients.entries()) {
+    if (client.role === role && client.ws.readyState === 1) {
+      client.ws.send(message)
     }
-    tvs.set(socket.id, tv)
+  }
+}
 
-    console.log(`[TV REGISTERED] ${data.name} (${data.tvId})`)
-    broadcastTVsList()
-    socket.emit('playback-state', playbackState)
-  })
+function sendToTVs(message) {
+  broadcastToRole('tv', message)
+}
 
-  // Register as Controller
-  socket.on('register-controller', (data) => {
-    socket.join('controllers')
-    socket.data.role = 'controller'
-    controllers.set(socket.id, { socketId: socket.id, name: data.name || 'Controller' })
-    console.log(`[CONTROLLER REGISTERED] ${data.name}`)
-    socket.emit('tvs-list', { tvs: getTVsList() })
-    socket.emit('playback-state', playbackState)
-  })
+function sendToTV(tvId, message) {
+  for (const [sid, client] of wsClients.entries()) {
+    if (client.tvId === tvId && client.ws.readyState === 1) {
+      client.ws.send(message)
+    }
+  }
+}
 
-  // Controller commands
-  socket.on('command', (data) => {
-    if (socket.data.role !== 'controller') return
-    const { action, payload } = data
-    const now = getServerTime()
-    const buffer = 500
+function handleCommand(socketId, action, payload) {
+  const now = Date.now()
+  const buffer = 500
 
-    switch (action) {
-      case 'load-playlist': {
-        const playlist = payload.playlist || []
-        const startIndex = payload.startIndex || 0
-        playbackState = {
-          ...playbackState,
-          mediaId: playlist[startIndex]?.id || null,
-          mediaType: playlist[startIndex]?.type || null,
-          mediaName: playlist[startIndex]?.name || null,
-          mediaUrl: playlist[startIndex]?.url || null,
-          isPlaying: false,
-          position: 0,
-          duration: playlist[startIndex]?.duration || 0,
-          targetPlayAt: null,
-          targetPosition: 0,
-          playlistId: payload.playlistId || null,
-          playlistIndex: startIndex,
-          playlist,
-        }
-        io.to('tvs').emit('load-media', {
-          mediaId: playbackState.mediaId,
-          mediaType: playbackState.mediaType,
-          mediaName: playbackState.mediaName,
-          mediaUrl: playbackState.mediaUrl,
-          duration: playbackState.duration,
-          playlist: playbackState.playlist,
+  switch (action) {
+    case 'load-playlist': {
+      const playlist = payload.playlist || []
+      const startIndex = payload.startIndex || 0
+      playbackState = {
+        ...playbackState,
+        mediaId: playlist[startIndex]?.id || null,
+        mediaType: playlist[startIndex]?.type || null,
+        mediaName: playlist[startIndex]?.name || null,
+        mediaUrl: playlist[startIndex]?.url || null,
+        isPlaying: false,
+        position: 0,
+        duration: playlist[startIndex]?.duration || 0,
+        targetPlayAt: null,
+        targetPosition: 0,
+        playlistId: payload.playlistId || null,
+        playlistIndex: startIndex,
+        playlist,
+      }
+      sendToTVs(JSON.stringify({
+        event: 'load-media',
+        data: {
+          mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
+          mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
+          duration: playbackState.duration, playlist: playbackState.playlist,
           playlistIndex: playbackState.playlistIndex,
-        })
-        broadcastPlaybackState()
-        break
+        },
+      }))
+      broadcastPlaybackState()
+      break
+    }
+    case 'play': {
+      const fromPosition = typeof payload.position === 'number' ? payload.position : playbackState.position
+      playbackState.isPlaying = true
+      playbackState.position = fromPosition
+      playbackState.targetPosition = fromPosition
+      playbackState.targetPlayAt = now + buffer
+      sendToTVs(JSON.stringify({
+        event: 'sync-play',
+        data: { targetPlayAt: playbackState.targetPlayAt, position: fromPosition },
+      }))
+      broadcastPlaybackState()
+      break
+    }
+    case 'pause': {
+      playbackState.isPlaying = false
+      playbackState.targetPlayAt = null
+      if (typeof payload.position === 'number') {
+        playbackState.position = payload.position
+        playbackState.targetPosition = payload.position
       }
-      case 'play': {
-        const fromPosition = typeof payload.position === 'number' ? payload.position : playbackState.position
-        playbackState.isPlaying = true
-        playbackState.position = fromPosition
-        playbackState.targetPosition = fromPosition
+      sendToTVs(JSON.stringify({ event: 'sync-pause', data: { position: playbackState.position } }))
+      broadcastPlaybackState()
+      break
+    }
+    case 'seek': {
+      const newPosition = payload.position || 0
+      playbackState.position = newPosition
+      playbackState.targetPosition = newPosition
+      if (playbackState.isPlaying) {
         playbackState.targetPlayAt = now + buffer
-        io.to('tvs').emit('sync-play', {
-          targetPlayAt: playbackState.targetPlayAt,
-          position: fromPosition,
-        })
-        broadcastPlaybackState()
-        break
+        sendToTVs(JSON.stringify({
+          event: 'sync-seek',
+          data: { position: newPosition, isPlaying: true, targetPlayAt: playbackState.targetPlayAt },
+        }))
+      } else {
+        sendToTVs(JSON.stringify({
+          event: 'sync-seek',
+          data: { position: newPosition, isPlaying: false, targetPlayAt: null },
+        }))
       }
-      case 'pause': {
-        playbackState.isPlaying = false
-        playbackState.targetPlayAt = null
-        if (typeof payload.position === 'number') {
-          playbackState.position = payload.position
-          playbackState.targetPosition = payload.position
-        }
-        io.to('tvs').emit('sync-pause', { position: playbackState.position })
-        broadcastPlaybackState()
-        break
-      }
-      case 'seek': {
-        const newPosition = payload.position || 0
-        playbackState.position = newPosition
-        playbackState.targetPosition = newPosition
-        if (playbackState.isPlaying) {
-          playbackState.targetPlayAt = now + buffer
-          io.to('tvs').emit('sync-seek', {
-            position: newPosition,
-            isPlaying: true,
-            targetPlayAt: playbackState.targetPlayAt,
-          })
-        } else {
-          io.to('tvs').emit('sync-seek', {
-            position: newPosition,
-            isPlaying: false,
-            targetPlayAt: null,
-          })
-        }
-        broadcastPlaybackState()
-        break
-      }
-      case 'next': {
-        const nextIndex = playbackState.playlistIndex + 1
-        if (nextIndex < playbackState.playlist.length) {
-          playbackState.playlistIndex = nextIndex
-          const item = playbackState.playlist[nextIndex]
-          playbackState.mediaId = item.id
-          playbackState.mediaType = item.type
-          playbackState.mediaName = item.name
-          playbackState.mediaUrl = item.url
-          playbackState.duration = item.duration
-          playbackState.position = 0
-          playbackState.targetPosition = 0
-          if (playbackState.isPlaying) {
-            playbackState.targetPlayAt = now + buffer
-            io.to('tvs').emit('load-media', {
-              mediaId: playbackState.mediaId,
-              mediaType: playbackState.mediaType,
-              mediaName: playbackState.mediaName,
-              mediaUrl: playbackState.mediaUrl,
-              duration: playbackState.duration,
-              playlist: playbackState.playlist,
-              playlistIndex: playbackState.playlistIndex,
-              autoPlay: true,
-              targetPlayAt: playbackState.targetPlayAt,
-            })
-          } else {
-            io.to('tvs').emit('load-media', {
-              mediaId: playbackState.mediaId,
-              mediaType: playbackState.mediaType,
-              mediaName: playbackState.mediaName,
-              mediaUrl: playbackState.mediaUrl,
-              duration: playbackState.duration,
-              playlist: playbackState.playlist,
-              playlistIndex: playbackState.playlistIndex,
-            })
-          }
-          broadcastPlaybackState()
-        }
-        break
-      }
-      case 'previous': {
-        const prevIndex = Math.max(0, playbackState.playlistIndex - 1)
-        if (prevIndex !== playbackState.playlistIndex) {
-          playbackState.playlistIndex = prevIndex
-          const item = playbackState.playlist[prevIndex]
-          playbackState.mediaId = item.id
-          playbackState.mediaType = item.type
-          playbackState.mediaName = item.name
-          playbackState.mediaUrl = item.url
-          playbackState.duration = item.duration
-          playbackState.position = 0
-          playbackState.targetPosition = 0
-          io.to('tvs').emit('load-media', {
-            mediaId: playbackState.mediaId,
-            mediaType: playbackState.mediaType,
-            mediaName: playbackState.mediaName,
-            mediaUrl: playbackState.mediaUrl,
-            duration: playbackState.duration,
-            playlist: playbackState.playlist,
-            playlistIndex: playbackState.playlistIndex,
-          })
-          broadcastPlaybackState()
-        }
-        break
-      }
-      case 'stop': {
-        playbackState.isPlaying = false
+      broadcastPlaybackState()
+      break
+    }
+    case 'next': {
+      const nextIndex = playbackState.playlistIndex + 1
+      if (nextIndex < playbackState.playlist.length) {
+        playbackState.playlistIndex = nextIndex
+        const item = playbackState.playlist[nextIndex]
+        playbackState.mediaId = item.id
+        playbackState.mediaType = item.type
+        playbackState.mediaName = item.name
+        playbackState.mediaUrl = item.url
+        playbackState.duration = item.duration
         playbackState.position = 0
         playbackState.targetPosition = 0
-        playbackState.targetPlayAt = null
-        io.to('tvs').emit('sync-stop')
-        broadcastPlaybackState()
-        break
-      }
-      case 'set-volume': {
-        if (payload.tvId) {
-          for (const tv of tvs.values()) {
-            if (tv.tvId === payload.tvId) {
-              tv.volume = payload.volume
-              io.to(tv.socketId).emit('set-volume', { volume: payload.volume })
-              break
-            }
-          }
+        if (playbackState.isPlaying) {
+          playbackState.targetPlayAt = now + buffer
+          sendToTVs(JSON.stringify({
+            event: 'load-media',
+            data: {
+              mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
+              mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
+              duration: playbackState.duration, playlist: playbackState.playlist,
+              playlistIndex: playbackState.playlistIndex,
+              autoPlay: true, targetPlayAt: playbackState.targetPlayAt,
+            },
+          }))
         } else {
-          for (const tv of tvs.values()) {
-            tv.volume = payload.volume
-          }
-          io.to('tvs').emit('set-volume', { volume: payload.volume })
+          sendToTVs(JSON.stringify({
+            event: 'load-media',
+            data: {
+              mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
+              mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
+              duration: playbackState.duration, playlist: playbackState.playlist,
+              playlistIndex: playbackState.playlistIndex,
+            },
+          }))
         }
-        broadcastTVsList()
-        break
+        broadcastPlaybackState()
       }
-      case 'rename-tv': {
-        const { tvId, name } = payload
-        for (const tv of tvs.values()) {
-          if (tv.tvId === tvId) {
-            tv.name = name
-            break
-          }
-        }
-        broadcastTVsList()
-        break
+      break
+    }
+    case 'previous': {
+      const prevIndex = Math.max(0, playbackState.playlistIndex - 1)
+      if (prevIndex !== playbackState.playlistIndex) {
+        playbackState.playlistIndex = prevIndex
+        const item = playbackState.playlist[prevIndex]
+        playbackState.mediaId = item.id
+        playbackState.mediaType = item.type
+        playbackState.mediaName = item.name
+        playbackState.mediaUrl = item.url
+        playbackState.duration = item.duration
+        playbackState.position = 0
+        playbackState.targetPosition = 0
+        sendToTVs(JSON.stringify({
+          event: 'load-media',
+          data: {
+            mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
+            mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
+            duration: playbackState.duration, playlist: playbackState.playlist,
+            playlistIndex: playbackState.playlistIndex,
+          },
+        }))
+        broadcastPlaybackState()
       }
-      case 'kick-tv': {
-        const { tvId } = payload
-        for (const [sid, tv] of tvs.entries()) {
-          if (tv.tvId === tvId) {
-            io.to(sid).emit('force-disconnect')
-            tvs.delete(sid)
-            break
-          }
-        }
-        broadcastTVsList()
-        break
-      }
+      break
     }
-  })
-
-  // TV reports progress
-  socket.on('tv-progress', (data) => {
-    if (socket.data.role !== 'tv') return
-    const tv = tvs.get(socket.id)
-    if (tv) {
-      tv.lastSeen = Date.now()
-    }
-    if (data.isPlaying) {
-      playbackState.position = data.position
-    }
-  })
-
-  // TV reports media ended
-  socket.on('tv-media-ended', (data) => {
-    if (socket.data.role !== 'tv') return
-    console.log(`[TV MEDIA ENDED] ${data.mediaId}`)
-    io.to('controllers').emit('media-ended', { mediaId: data.mediaId, from: socket.id })
-  })
-
-  // TV reports duration
-  socket.on('tv-duration', (data) => {
-    if (socket.data.role !== 'tv') return
-    if (data.duration && data.duration > 0) {
-      playbackState.duration = data.duration
+    case 'stop': {
+      playbackState.isPlaying = false
+      playbackState.position = 0
+      playbackState.targetPosition = 0
+      playbackState.targetPlayAt = null
+      sendToTVs(JSON.stringify({ event: 'sync-stop' }))
       broadcastPlaybackState()
+      break
     }
-  })
-
-  // Disconnect
-  socket.on('disconnect', () => {
-    if (socket.data.role === 'tv') {
-      const tv = tvs.get(socket.id)
-      if (tv) {
-        tvs.delete(socket.id)
-        console.log(`[TV DISCONNECTED] ${tv.name}`)
+    case 'set-volume': {
+      if (payload.tvId) {
+        for (const tv of tvs.values()) {
+          if (tv.tvId === payload.tvId) {
+            tv.volume = payload.volume
+            sendToTV(payload.tvId, JSON.stringify({ event: 'set-volume', data: { volume: payload.volume } }))
+            break
+          }
+        }
+      } else {
+        for (const tv of tvs.values()) tv.volume = payload.volume
+        sendToTVs(JSON.stringify({ event: 'set-volume', data: { volume: payload.volume } }))
       }
       broadcastTVsList()
-    } else if (socket.data.role === 'controller') {
-      controllers.delete(socket.id)
-      console.log(`[CONTROLLER DISCONNECTED]`)
+      break
+    }
+    case 'rename-tv': {
+      const { tvId, name } = payload
+      for (const tv of tvs.values()) {
+        if (tv.tvId === tvId) { tv.name = name; break }
+      }
+      broadcastTVsList()
+      break
+    }
+    case 'kick-tv': {
+      const { tvId } = payload
+      sendToTV(tvId, JSON.stringify({ event: 'force-disconnect' }))
+      for (const [sid, tv] of tvs.entries()) {
+        if (tv.tvId === tvId) { tvs.delete(sid); break }
+      }
+      broadcastTVsList()
+      break
+    }
+  }
+}
+
+// ============================================================
+// HTTP server (handles health checks + WebSocket upgrade)
+// ============================================================
+const server = http.createServer((req, res) => {
+  // CORS headers for all responses
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200)
+    res.end()
+    return
+  }
+
+  // Health check endpoint for Render
+  if (req.url === '/' || req.url === '/health' || req.url === '/healthz') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ status: 'ok', service: 'synccast-sync', uptime: process.uptime() }))
+    return
+  }
+
+  // Socket.io polling endpoint (for clients that don't support WebSocket)
+  if (req.url && req.url.startsWith('/socket.io/')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ sid: crypto.randomBytes(16).toString('hex'), upgrades: ['websocket'] }))
+    return
+  }
+
+  res.writeHead(404)
+  res.end('Not found')
+})
+
+// ============================================================
+// Native WebSocket handling (RFC 6455 implementation)
+// ============================================================
+server.on('upgrade', (req, socket, head) => {
+  // Accept WebSocket upgrade
+  const key = req.headers['sec-websocket-key']
+  if (!key) {
+    socket.destroy()
+    return
+  }
+
+  const accept = crypto
+    .createHash('sha1')
+    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+    .digest('base64')
+
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n' +
+    'Upgrade: websocket\r\n' +
+    'Connection: Upgrade\r\n' +
+    'Sec-WebSocket-Accept: ' + accept + '\r\n' +
+    '\r\n'
+  )
+
+  const socketId = crypto.randomBytes(16).toString('hex')
+  const client = { ws: socket, role: null, tvId: null, buffer: Buffer.alloc(0) }
+  wsClients.set(socketId, client)
+
+  console.log(`[WS CONNECT] ${socketId}`)
+
+  socket.on('data', (chunk) => {
+    try {
+      client.buffer = Buffer.concat([client.buffer, chunk])
+      while (client.buffer.length >= 2) {
+        const frame = parseFrame(client.buffer)
+        if (!frame) break
+        client.buffer = client.buffer.slice(frame.totalLength)
+        if (frame.opcode === 0x8) {  // Close
+          socket.end()
+          return
+        }
+        if (frame.opcode === 0x9) {  // Ping
+          sendFrame(socket, frame.payload, 0xA)
+          continue
+        }
+        if (frame.opcode === 0x1 && frame.payload) {  // Text
+          handleMessage(socketId, frame.payload.toString())
+        }
+      }
+    } catch (e) {
+      console.error('[WS ERROR]', e.message)
     }
   })
 
-  socket.on('error', (error) => {
-    console.error(`[SOCKET ERROR] ${socket.id}:`, error)
+  socket.on('close', () => {
+    const client = wsClients.get(socketId)
+    if (client) {
+      if (client.role === 'tv') {
+        const tv = tvs.get(socketId)
+        if (tv) {
+          tvs.delete(socketId)
+          console.log(`[TV DISCONNECTED] ${tv.name}`)
+        }
+        broadcastTVsList()
+      } else if (client.role === 'controller') {
+        controllers.delete(socketId)
+        console.log('[CONTROLLER DISCONNECTED]')
+      }
+      wsClients.delete(socketId)
+    }
+  })
+
+  socket.on('error', (err) => {
+    console.error(`[SOCKET ERROR] ${socketId}:`, err.message)
   })
 })
 
-// Use the port provided by the environment (Render, Railway, etc.) or fall back to 3003
+function parseFrame(buffer) {
+  if (buffer.length < 2) return null
+  const opcode = buffer[0] & 0x0F
+  let payloadLen = buffer[1] & 0x7F
+  let offset = 2
+  if (payloadLen === 126) {
+    if (buffer.length < 4) return null
+    payloadLen = buffer.readUInt16BE(2)
+    offset = 4
+  } else if (payloadLen === 127) {
+    if (buffer.length < 10) return null
+    payloadLen = Number(buffer.readBigUInt64BE(2))
+    offset = 10
+  }
+  if (buffer.length < offset + payloadLen) return null
+  const payload = buffer.slice(offset, offset + payloadLen)
+  return { opcode, payload, totalLength: offset + payloadLen }
+}
+
+function sendFrame(socket, data, opcode = 0x1) {
+  const payload = Buffer.isBuffer(data) ? data : Buffer.from(data)
+  const len = payload.length
+  let header
+  if (len < 126) {
+    header = Buffer.alloc(2)
+    header[1] = len
+  } else if (len < 65536) {
+    header = Buffer.alloc(4)
+    header[1] = 126
+    header.writeUInt16BE(len, 2)
+  } else {
+    header = Buffer.alloc(10)
+    header[1] = 127
+    header.writeBigUInt64BE(BigInt(len), 2)
+  }
+  header[0] = 0x80 | opcode  // FIN bit + opcode
+  socket.write(Buffer.concat([header, payload]))
+}
+
+function handleMessage(socketId, message) {
+  let parsed
+  try {
+    parsed = JSON.parse(message)
+  } catch {
+    return
+  }
+
+  const { event, data } = parsed
+  const client = wsClients.get(socketId)
+  if (!client) return
+
+  switch (event) {
+    case 'sync-ping': {
+      const t2 = Date.now()
+      sendFrame(client.ws, JSON.stringify({ event: 'sync-pong', data: { t1: data.t1, t2, t3: Date.now() } }))
+      break
+    }
+    case 'register-tv': {
+      client.role = 'tv'
+      client.tvId = data.tvId
+      tvs.set(socketId, {
+        socketId: socketId, tvId: data.tvId, name: data.name,
+        isOnline: true, volume: 80, lastSeen: Date.now(),
+      })
+      console.log(`[TV REGISTERED] ${data.name} (${data.tvId})`)
+      broadcastTVsList()
+      sendFrame(client.ws, JSON.stringify({ event: 'playback-state', data: playbackState }))
+      break
+    }
+    case 'register-controller': {
+      client.role = 'controller'
+      controllers.set(socketId, { socketId: socketId, name: data.name || 'Controller' })
+      console.log(`[CONTROLLER REGISTERED] ${data.name}`)
+      sendFrame(client.ws, JSON.stringify({ event: 'tvs-list', data: { tvs: getTVsList() } }))
+      sendFrame(client.ws, JSON.stringify({ event: 'playback-state', data: playbackState }))
+      break
+    }
+    case 'command': {
+      if (client.role !== 'controller') return
+      handleCommand(socketId, data.action, data.payload)
+      break
+    }
+    case 'tv-progress': {
+      if (client.role !== 'tv') return
+      const tv = tvs.get(socketId)
+      if (tv) tv.lastSeen = Date.now()
+      if (data.isPlaying) playbackState.position = data.position
+      break
+    }
+    case 'tv-media-ended': {
+      if (client.role !== 'tv') return
+      broadcastToRole('controllers', JSON.stringify({ event: 'media-ended', data: { mediaId: data.mediaId } }))
+      break
+    }
+    case 'tv-duration': {
+      if (client.role !== 'tv') return
+      if (data.duration && data.duration > 0) {
+        playbackState.duration = data.duration
+        broadcastPlaybackState()
+      }
+      break
+    }
+  }
+}
+
+// ============================================================
+// Start server
+// ============================================================
 const PORT = parseInt(process.env.PORT || '3003', 10)
-httpServer.listen(PORT, () => {
-  console.log(`[SYNC-SERVICE] WebSocket server running on port ${PORT}`)
+server.listen(PORT, () => {
+  console.log(`[SYNC-SERVICE] Server running on port ${PORT}`)
+  console.log(`[SYNC-SERVICE] Health check: http://localhost:${PORT}/`)
 })
 
 process.on('SIGTERM', () => {
   console.log('[SYNC-SERVICE] SIGTERM received, shutting down...')
-  httpServer.close(() => process.exit(0))
+  server.close(() => process.exit(0))
 })
 
 process.on('SIGINT', () => {
   console.log('[SYNC-SERVICE] SIGINT received, shutting down...')
-  httpServer.close(() => process.exit(0))
+  server.close(() => process.exit(0))
 })
