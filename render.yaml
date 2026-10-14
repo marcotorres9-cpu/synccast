@@ -12,5 +12,3 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        fromRender: true
