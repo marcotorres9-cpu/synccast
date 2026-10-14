@@ -1,5 +1,5 @@
-import { createServer } from 'http'
-import { Server, Socket } from 'socket.io'
+const { createServer } = require('http')
+const { Server } = require('socket.io')
 
 const httpServer = createServer()
 const io = new Server(httpServer, {
@@ -7,49 +7,19 @@ const io = new Server(httpServer, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
   pingTimeout: 60000,
   pingInterval: 25000,
+  maxHttpBufferSize: 5 * 1024 * 1024,
 })
 
 // ============================================================
-// Types
+// Types (as JSDoc comments for clarity)
 // ============================================================
-type ClientRole = 'tv' | 'controller'
 
-interface TVClient {
-  socketId: string
-  tvId: string
-  name: string
-  isOnline: boolean
-  volume: number
-  lastSeen: number
-}
+/** @type {Map<string, {socketId: string, tvId: string, name: string, isOnline: boolean, volume: number, lastSeen: number}>} */
+const tvs = new Map()
+/** @type {Map<string, {socketId: string, name: string}>} */
+const controllers = new Map()
 
-interface ControllerClient {
-  socketId: string
-  name: string
-}
-
-interface PlaybackState {
-  mediaId: string | null
-  mediaType: 'video' | 'audio' | null
-  mediaName: string | null
-  mediaUrl: string | null
-  isPlaying: boolean
-  position: number // seconds
-  duration: number
-  targetPlayAt: number | null // absolute timestamp (server time) when playback should start/resume
-  targetPosition: number // position in seconds at targetPlayAt
-  playlistId: string | null
-  playlistIndex: number
-  playlist: Array<{ id: string; name: string; url: string; type: string; duration: number }>
-}
-
-// ============================================================
-// State
-// ============================================================
-const tvs = new Map<string, TVClient>()
-const controllers = new Map<string, ControllerClient>()
-
-let playbackState: PlaybackState = {
+let playbackState = {
   mediaId: null,
   mediaType: null,
   mediaName: null,
@@ -64,9 +34,6 @@ let playbackState: PlaybackState = {
   playlist: [],
 }
 
-// ============================================================
-// Helpers
-// ============================================================
 function getTVsList() {
   return Array.from(tvs.values()).map((tv) => ({
     tvId: tv.tvId,
@@ -89,29 +56,22 @@ function getServerTime() {
   return Date.now()
 }
 
-// ============================================================
-// Connection handling
-// ============================================================
-io.on('connection', (socket: Socket) => {
+io.on('connection', (socket) => {
   console.log(`[CONNECT] ${socket.id}`)
 
-  // ----------------------------------------------------------
   // Clock sync (NTP-like)
-  // ----------------------------------------------------------
-  socket.on('sync-ping', (data: { t1: number }) => {
+  socket.on('sync-ping', (data) => {
     const t2 = getServerTime()
     socket.emit('sync-pong', { t1: data.t1, t2, t3: getServerTime() })
   })
 
-  // ----------------------------------------------------------
   // Register as TV
-  // ----------------------------------------------------------
-  socket.on('register-tv', (data: { tvId: string; name: string }) => {
+  socket.on('register-tv', (data) => {
     socket.join('tvs')
     socket.data.role = 'tv'
     socket.data.tvId = data.tvId
 
-    const tv: TVClient = {
+    const tv = {
       socketId: socket.id,
       tvId: data.tvId,
       name: data.name,
@@ -123,37 +83,24 @@ io.on('connection', (socket: Socket) => {
 
     console.log(`[TV REGISTERED] ${data.name} (${data.tvId})`)
     broadcastTVsList()
-    // Send current playback state to the newly registered TV
     socket.emit('playback-state', playbackState)
   })
 
-  // ----------------------------------------------------------
   // Register as Controller
-  // ----------------------------------------------------------
-  socket.on('register-controller', (data: { name: string }) => {
+  socket.on('register-controller', (data) => {
     socket.join('controllers')
     socket.data.role = 'controller'
-
-    controllers.set(socket.id, {
-      socketId: socket.id,
-      name: data.name || 'Controller',
-    })
-
+    controllers.set(socket.id, { socketId: socket.id, name: data.name || 'Controller' })
     console.log(`[CONTROLLER REGISTERED] ${data.name}`)
-    // Send current state to the controller
     socket.emit('tvs-list', { tvs: getTVsList() })
     socket.emit('playback-state', playbackState)
   })
 
-  // ----------------------------------------------------------
   // Controller commands
-  // ----------------------------------------------------------
-  socket.on('command', (data: any) => {
+  socket.on('command', (data) => {
     if (socket.data.role !== 'controller') return
-
     const { action, payload } = data
     const now = getServerTime()
-    // 500ms buffer for sync
     const buffer = 500
 
     switch (action) {
@@ -238,7 +185,7 @@ io.on('connection', (socket: Socket) => {
           playbackState.playlistIndex = nextIndex
           const item = playbackState.playlist[nextIndex]
           playbackState.mediaId = item.id
-          playbackState.mediaType = item.type as any
+          playbackState.mediaType = item.type
           playbackState.mediaName = item.name
           playbackState.mediaUrl = item.url
           playbackState.duration = item.duration
@@ -278,7 +225,7 @@ io.on('connection', (socket: Socket) => {
           playbackState.playlistIndex = prevIndex
           const item = playbackState.playlist[prevIndex]
           playbackState.mediaId = item.id
-          playbackState.mediaType = item.type as any
+          playbackState.mediaType = item.type
           playbackState.mediaName = item.name
           playbackState.mediaUrl = item.url
           playbackState.duration = item.duration
@@ -307,9 +254,7 @@ io.on('connection', (socket: Socket) => {
         break
       }
       case 'set-volume': {
-        // payload: { tvId, volume } or { volume } (master)
         if (payload.tvId) {
-          // Find TV by tvId and update its volume
           for (const tv of tvs.values()) {
             if (tv.tvId === payload.tvId) {
               tv.volume = payload.volume
@@ -318,7 +263,6 @@ io.on('connection', (socket: Socket) => {
             }
           }
         } else {
-          // Master volume - all TVs
           for (const tv of tvs.values()) {
             tv.volume = payload.volume
           }
@@ -353,36 +297,27 @@ io.on('connection', (socket: Socket) => {
     }
   })
 
-  // ----------------------------------------------------------
-  // TV reports progress (for drift detection)
-  // ----------------------------------------------------------
-  socket.on('tv-progress', (data: { position: number; isPlaying: boolean }) => {
+  // TV reports progress
+  socket.on('tv-progress', (data) => {
     if (socket.data.role !== 'tv') return
     const tv = tvs.get(socket.id)
     if (tv) {
       tv.lastSeen = Date.now()
     }
-    // Update server-side position estimate
     if (data.isPlaying) {
       playbackState.position = data.position
     }
   })
 
-  // ----------------------------------------------------------
   // TV reports media ended
-  // ----------------------------------------------------------
-  socket.on('tv-media-ended', (data: { mediaId: string }) => {
+  socket.on('tv-media-ended', (data) => {
     if (socket.data.role !== 'tv') return
     console.log(`[TV MEDIA ENDED] ${data.mediaId}`)
-    // If first TV reports ended, advance playlist
-    // To avoid duplicates, only the controller advances; TVs just stop
     io.to('controllers').emit('media-ended', { mediaId: data.mediaId, from: socket.id })
   })
 
-  // ----------------------------------------------------------
   // TV reports duration
-  // ----------------------------------------------------------
-  socket.on('tv-duration', (data: { duration: number }) => {
+  socket.on('tv-duration', (data) => {
     if (socket.data.role !== 'tv') return
     if (data.duration && data.duration > 0) {
       playbackState.duration = data.duration
@@ -390,9 +325,7 @@ io.on('connection', (socket: Socket) => {
     }
   })
 
-  // ----------------------------------------------------------
   // Disconnect
-  // ----------------------------------------------------------
   socket.on('disconnect', () => {
     if (socket.data.role === 'tv') {
       const tv = tvs.get(socket.id)
@@ -412,6 +345,7 @@ io.on('connection', (socket: Socket) => {
   })
 })
 
+// Use the port provided by the environment (Render, Railway, etc.) or fall back to 3003
 const PORT = parseInt(process.env.PORT || '3003', 10)
 httpServer.listen(PORT, () => {
   console.log(`[SYNC-SERVICE] WebSocket server running on port ${PORT}`)

@@ -1,9 +1,9 @@
 {
   "name": "sync-service",
-  "module": "index.ts",
+  "main": "index.js",
   "scripts": {
-    "dev": "bun --hot index.ts",
-    "start": "bun run index.ts"
+    "dev": "node index.js",
+    "start": "node index.js"
   },
   "dependencies": {
     "socket.io": "^4.8.4"

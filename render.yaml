@@ -6,7 +6,7 @@ services:
     region: ohio
     rootDir: mini-services/sync-service
     buildCommand: npm install
-    startCommand: npx bun run index.ts
+    startCommand: node index.js
     healthCheckPath: /
     autoDeploy: true
     envVars:
