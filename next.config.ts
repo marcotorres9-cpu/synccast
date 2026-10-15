@@ -1,7 +1,5 @@
 import type { NextConfig } from "next";
 
-// Allow building a static export for the APK by setting
-// NEXT_OUTPUT=export at build time. Default is standalone (for server deployment).
 const outputMode = (process.env.NEXT_OUTPUT as 'standalone' | 'export' | undefined) || 'standalone';
 
 const nextConfig: NextConfig = {
@@ -10,10 +8,21 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  // For static export, disable image optimization (not supported)
   images: outputMode === 'export' ? { unoptimized: true } : undefined,
-  // For static export, set trailing slash for cleaner mobile URLs
   trailingSlash: outputMode === 'export',
+  async headers() {
+    return [
+      {
+        // Apply CORS to all API routes
+        source: '/api/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
+          { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization' },
+        ],
+      },
+    ]
+  },
 };
 
 export default nextConfig;

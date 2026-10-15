@@ -47,6 +47,17 @@ async function uploadToCloudinary(file: File): Promise<any> {
   return await response.json()
 }
 
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    },
+  })
+}
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
@@ -77,19 +88,11 @@ export async function POST(req: NextRequest) {
         mediaSize = result.bytes
         mediaDuration = result.duration || null
       } else {
-        // Fallback: local fs (works in dev only)
-        const { writeFile, mkdir } = await import('fs/promises')
-        const { existsSync } = await import('fs')
-        const path = await import('path')
-        const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
-        if (!existsSync(uploadsDir)) await mkdir(uploadsDir, { recursive: true })
-        const buffer = Buffer.from(await file.arrayBuffer())
-        const ext = path.extname(file.name)
-        const baseName = path.basename(file.name, ext)
-        const uniqueName = `${baseName}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`
-        await writeFile(path.join(uploadsDir, uniqueName), buffer)
-        mediaUrl = `/uploads/${uniqueName}`
-        mediaFilename = uniqueName
+        // No Cloudinary configured - cannot save files on Vercel serverless
+        // Return a clear error message
+        return NextResponse.json({
+          error: 'Para subir archivos necesitas configurar Cloudinary (gratis 25GB). Ve a https://cloudinary.com, crea cuenta, y agrega CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET en Vercel Environment Variables.'
+        }, { status: 501 })
       }
 
       const media = await db.mediaFile.create({
