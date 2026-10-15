@@ -8,20 +8,20 @@ import {
   Download, Smartphone, Tv, Cast, Zap, Wifi, Volume2, Monitor,
   CheckCircle2, ArrowRight, Github, ExternalLink, Star, Shield,
   Music, Video, Play, Clock, Cpu, Globe, ChevronDown, ChevronRight,
-  AlertCircle, Package, RefreshCw
+  AlertCircle, Package, RefreshCw, Youtube, Upload, Server, Database
 } from 'lucide-react'
 
 export default function DownloadPage() {
-  const [apkSize, setApkSize] = useState<string>('4.3 MB')
-  const [version] = useState('1.0.0')
-  const [releaseDate] = useState('Octubre 2026')
+  const [apkSize, setApkSize] = useState<string>('7.5 MB')
+  const [version] = useState('1.1.0')
+  const [releaseDate] = useState('15 Octubre 2026')
   const [downloading, setDownloading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState(0)
   const [activeFaq, setActiveFaq] = useState<number | null>(0)
 
   useEffect(() => {
     // Fetch APK size from HEAD request
-    fetch('/downloads/SyncCast-v1.0.apk', { method: 'HEAD' })
+    fetch('/downloads/SyncCast-v1.1.0.apk', { method: 'HEAD' })
       .then((res) => {
         const size = parseInt(res.headers.get('content-length') || '0', 10)
         if (size > 0) {
@@ -36,7 +36,7 @@ export default function DownloadPage() {
     setDownloading(true)
     setDownloadProgress(0)
     try {
-      const res = await fetch('/downloads/SyncCast-v1.0.apk')
+      const res = await fetch('/downloads/SyncCast-v1.1.0.apk')
       const contentLength = res.headers.get('content-length')
       const total = contentLength ? parseInt(contentLength, 10) : 0
       const reader = res.body?.getReader()
@@ -65,7 +65,7 @@ export default function DownloadPage() {
       URL.revokeObjectURL(url)
     } catch (e) {
       // Fallback: direct link
-      window.location.href = '/downloads/SyncCast-v1.0.apk'
+      window.location.href = '/downloads/SyncCast-v1.1.0.apk'
     } finally {
       setTimeout(() => {
         setDownloading(false)
@@ -199,6 +199,59 @@ export default function DownloadPage() {
           <Stat icon={<Zap className="w-5 h-5" />} value="500ms" label="Precisión sync" />
           <Stat icon={<Wifi className="w-5 h-5" />} value="WiFi" label="Red local" />
           <Stat icon={<Star className="w-5 h-5" />} value="4.3MB" label="Tamaño ligero" />
+        </div>
+      </section>
+
+      {/* What's New - Release Notes */}
+      <section className="px-4 sm:px-6 py-16">
+        <div className="max-w-4xl mx-auto">
+          <div className="text-center mb-10">
+            <Badge variant="outline" className="glass border-primary/30 text-primary mb-3">
+              <SparklesIcon /> Novedades de la versión {version}
+            </Badge>
+            <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3">
+              Qué hay de nuevo
+            </h2>
+            <p className="text-white/60">Última actualización: {releaseDate}</p>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-4">
+            <ReleaseNote
+              icon={<Youtube className="w-5 h-5" />}
+              title="Soporte para YouTube"
+              desc="Reproduce cualquier video de YouTube en todos tus TVs sincronizadamente. La resolución se ajusta automáticamente a la máxima que soporte cada dispositivo (hasta 4K)."
+              tag="NUEVO"
+            />
+            <ReleaseNote
+              icon={<Upload className="w-5 h-5" />}
+              title="Subida de archivos grandes"
+              desc="Integración con Cloudinary para subir videos pesados sin límite de tamaño. Configura tus credenciales en Vercel para activarlo."
+              tag="MEJORADO"
+            />
+            <ReleaseNote
+              icon={<Server className="w-5 h-5" />}
+              title="WebSocket optimizado"
+              desc="Servidor WebSocket sin dependencias externas. Más rápido, más estable, deploy instantáneo en Render."
+              tag="OPTIMIZADO"
+            />
+            <ReleaseNote
+              icon={<Database className="w-5 h-5" />}
+              title="Base de datos Neon"
+              desc="Persistencia confiable con PostgreSQL en Neon. Tus archivos y playlists se mantienen entre sesiones."
+              tag="NUEVO"
+            />
+          </div>
+
+          <div className="mt-6 p-4 rounded-lg glass border border-amber-500/20 bg-amber-500/5">
+            <div className="flex gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-white/80">
+                <strong className="text-amber-400">Si ya tienes la v1.0.0 instalada:</strong> Desinstálala primero
+                (Ajustes → Apps → SyncCast → Desinstalar) y luego instala la nueva versión. Tus TVs y configuración
+                se mantienen porque se guardan en el navegador del TV, no en el APK.
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -574,6 +627,22 @@ function Faq({ q, a }: { q: string; a: string }) {
           {a}
         </div>
       )}
+    </Card>
+  )
+}
+
+function ReleaseNote({ icon, title, desc, tag }: { icon: React.ReactNode; title: string; desc: string; tag: string }) {
+  const tagColor = tag === 'NUEVO' ? 'bg-green-500/20 text-green-400 border-green-500/30' : tag === 'MEJORADO' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+  return (
+    <Card className="glass-card p-5 hover:border-primary/30 transition-all">
+      <div className="flex items-start justify-between mb-3">
+        <div className="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+          {icon}
+        </div>
+        <span className={`text-xs px-2 py-0.5 rounded-full border ${tagColor}`}>{tag}</span>
+      </div>
+      <h3 className="text-base font-semibold text-white mb-2">{title}</h3>
+      <p className="text-sm text-white/60 leading-relaxed">{desc}</p>
     </Card>
   )
 }
