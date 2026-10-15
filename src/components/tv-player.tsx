@@ -428,8 +428,31 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     setShowOverlay((v) => !v)
   }, [])
 
+  // Retry loading YouTube (when it failed or timed out)
+  const handleRetryYouTube = useCallback(() => {
+    if (mediaInfo.mediaType !== 'youtube' || !mediaInfo.youtubeId) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setError(null)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(true)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setYtReady(false)
+    // Force YouTube player re-creation by toggling the youtubeId
+    const ytId = mediaInfo.youtubeId
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMediaInfo((prev) => ({ ...prev, youtubeId: null }))
+    setTimeout(() => {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMediaInfo((prev) => ({ ...prev, youtubeId: ytId }))
+    }, 100)
+  }, [mediaInfo.mediaType, mediaInfo.youtubeId])
+
   const handleManualPlay = useCallback(() => {
-    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
+    if (mediaInfo.mediaType === 'youtube') {
+      if (!ytReady || !ytPlayerRef.current) {
+        handleRetryYouTube()
+        return
+      }
       try {
         const state = ytPlayerRef.current.getPlayerState()
         if (state === 1) {
@@ -440,7 +463,9 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
           setIsPlaying(true)
           setShowOverlay(false)
         }
-      } catch {}
+      } catch {
+        handleRetryYouTube()
+      }
       return
     }
     const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
@@ -457,7 +482,7 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsPlaying(false)
     }
-  }, [mediaInfo.mediaType, ytReady])
+  }, [mediaInfo.mediaType, ytReady, handleRetryYouTube])
 
   const formatTime = (s: number) => {
     if (!s || isNaN(s)) return '0:00'
@@ -530,19 +555,27 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
         </div>
       )}
 
-      {/* Error overlay */}
-      {error && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 max-w-md w-full px-4">
-          <Card className="glass-card p-4 flex items-center gap-3 border-destructive/50">
-            <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0" />
-            <p className="text-sm text-white/90 flex-1">{error}</p>
+      {/* Error overlay with retry button */}
+      {error && !loading && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/80 p-4">
+          <Card className="glass-card p-6 max-w-md w-full text-center border-destructive/50">
+            <AlertCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
+            <p className="text-base text-white/90 mb-4">{error}</p>
             <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setError(null)}
-              className="text-white/60 hover:text-white"
+              onClick={() => {
+                if (mediaInfo.mediaType === 'youtube') {
+                  handleRetryYouTube()
+                } else {
+                  setError(null)
+                  handleManualPlay()
+                }
+              }}
+              size="lg"
+              className="bg-primary text-white w-full min-h-[50px]"
+              autoFocus
             >
-              ✕
+              <Play className="w-5 h-5 mr-2" />
+              Reintentar
             </Button>
           </Card>
         </div>
@@ -615,8 +648,9 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
               <div className="mt-3 flex justify-center">
                 <Button
                   onClick={handleManualPlay}
-                  size="sm"
-                  className="bg-primary text-white"
+                  size="lg"
+                  className="bg-primary text-white text-base px-8 py-6 min-h-[60px]"
+                  autoFocus
                 >
                   <Play className="w-4 h-4 mr-1.5" />
                   Toca para reproducir
