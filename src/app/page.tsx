@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Smartphone, Monitor, Cast, Tv, ArrowRight, Sparkles, Wifi, Zap, Volume2, Settings, Server, Check, ArrowLeft, Download } from 'lucide-react'
 import { getServerUrl, setServerUrl } from '@/lib/server-url'
+import { getCurrentVersion } from '@/lib/auto-updater'
 import { notifyServerUrlChanged } from '@/hooks/use-sync-socket'
 
 type Role = 'landing' | 'controller' | 'tv-setup' | 'tv-player' | 'server-setup'
@@ -232,15 +233,18 @@ function Landing({
               <p className="text-xs text-white/60">Multi-TV Video & Music Sync</p>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onServerSetup}
-            className="glass border border-white/10 text-white/70 hover:text-white"
-          >
-            <Settings className="w-4 h-4 mr-1.5" />
-            Servidor
-          </Button>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/40">v{getCurrentVersion()}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onServerSetup}
+              className="glass border border-white/10 text-white/70 hover:text-white"
+            >
+              <Settings className="w-4 h-4 mr-1.5" />
+              Servidor
+            </Button>
+          </div>
         </div>
       </header>
 

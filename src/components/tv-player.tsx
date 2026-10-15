@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Wifi, Volume2, VolumeX, Monitor, Music, Video, Youtube, AlertCircle, Loader2, Play } from 'lucide-react'
 import { getServerUrl } from '@/lib/server-url'
+import { getCurrentVersion } from '@/lib/auto-updater'
 
 function resolveMediaUrl(url: string | null | undefined): string | null {
   if (!url) return null
@@ -385,15 +386,35 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
         />
       )}
       {mediaInfo.mediaType === 'youtube' && mediaInfo.youtubeId && (
-        <div className="w-full h-full flex items-center justify-center bg-black">
+        <div className="w-full h-full flex flex-col items-center justify-center bg-black p-4">
+          {/* Try iframe first (works on most devices) */}
           <iframe
-            src={`https://www.youtube.com/embed/${mediaInfo.youtubeId}?autoplay=1&controls=0&modestbranding=1&playsinline=1&rel=0&showinfo=0&enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
-            className="w-full h-full"
-            style={{ border: 'none', maxWidth: '100vw', maxHeight: '100vh' }}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            src={`https://www.youtube.com/embed/${mediaInfo.youtubeId}?autoplay=1&rel=0`}
+            className="w-full h-full max-w-[100vw] max-h-[80vh]"
+            style={{ border: 'none' }}
+            allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
             allowFullScreen
             ref={youtubeContainerRef}
+            onLoad={() => {
+              setLoading(false)
+              setYtReady(true)
+              setIsPlaying(true)
+            }}
+            onError={() => {
+              setLoading(false)
+              setError('No se pudo cargar el video. Usa el botón abajo para abrir en YouTube.')
+            }}
           />
+          {/* Fallback: big button to open YouTube directly */}
+          <a
+            href={`https://www.youtube.com/watch?v=${mediaInfo.youtubeId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-4 inline-flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition text-base"
+          >
+            <Youtube className="w-5 h-5" />
+            Abrir en YouTube
+          </a>
         </div>
       )}
 
@@ -527,6 +548,11 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
           </div>
         </div>
       )}
+
+      {/* Version indicator (always visible, small) */}
+      <div className="absolute bottom-2 left-2 z-20 text-xs text-white/30 pointer-events-none">
+        v{getCurrentVersion()}
+      </div>
 
       {/* No media state */}
       {!hasMedia && !loading && (
