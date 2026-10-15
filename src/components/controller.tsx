@@ -278,21 +278,21 @@ export function Controller() {
       {/* Main content */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 py-6 pb-24">
         <Tabs value={tab} onValueChange={setTab} className="w-full">
-          <TabsList className="grid grid-cols-5 w-full glass">
-            <TabsTrigger value="player" className="data-[state=active]:bg-primary/20">
-              <Play className="w-4 h-4 mr-1.5" /> Reproductor
+          <TabsList className="flex w-full glass overflow-x-auto overflow-y-hidden">
+            <TabsTrigger value="player" className="data-[state=active]:bg-primary/20 flex-1 min-w-[60px] px-2 sm:px-3">
+              <Play className="w-4 h-4 sm:mr-1.5" /> <span className="hidden sm:inline">Reproductor</span>
             </TabsTrigger>
-            <TabsTrigger value="videos" className="data-[state=active]:bg-primary/20">
-              <Video className="w-4 h-4 mr-1.5" /> Videos
+            <TabsTrigger value="videos" className="data-[state=active]:bg-primary/20 flex-1 min-w-[60px] px-2 sm:px-3">
+              <Video className="w-4 h-4 sm:mr-1.5" /> <span className="hidden sm:inline">Videos</span>
             </TabsTrigger>
-            <TabsTrigger value="music" className="data-[state=active]:bg-primary/20">
-              <Music className="w-4 h-4 mr-1.5" /> Música
+            <TabsTrigger value="music" className="data-[state=active]:bg-primary/20 flex-1 min-w-[60px] px-2 sm:px-3">
+              <Music className="w-4 h-4 sm:mr-1.5" /> <span className="hidden sm:inline">Música</span>
             </TabsTrigger>
-            <TabsTrigger value="youtube" className="data-[state=active]:bg-primary/20">
-              <Youtube className="w-4 h-4 mr-1.5" /> YouTube
+            <TabsTrigger value="youtube" className="data-[state=active]:bg-primary/20 flex-1 min-w-[60px] px-2 sm:px-3">
+              <Youtube className="w-4 h-4 sm:mr-1.5" /> <span className="hidden sm:inline">YouTube</span>
             </TabsTrigger>
-            <TabsTrigger value="tvs" className="data-[state=active]:bg-primary/20">
-              <Tv className="w-4 h-4 mr-1.5" /> TVs ({onlineTvs.length})
+            <TabsTrigger value="tvs" className="data-[state=active]:bg-primary/20 flex-1 min-w-[60px] px-2 sm:px-3">
+              <Tv className="w-4 h-4 sm:mr-1.5" /> <span className="hidden sm:inline">TVs</span> ({onlineTvs.length})
             </TabsTrigger>
           </TabsList>
 

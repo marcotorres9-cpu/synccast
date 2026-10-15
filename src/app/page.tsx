@@ -138,8 +138,7 @@ function ServerSetupScreen({ onDone, onBack }: { onDone: () => void; onBack: () 
           </div>
           <h2 className="text-2xl font-bold text-white mb-2">Configurar Servidor</h2>
           <p className="text-sm text-white/60">
-            Ingresa la URL del servidor SyncCast donde se está ejecutando el backend.
-            Debe ser accesible desde tu red WiFi local.
+            Ingresa la URL del servidor SyncCast (Vercel + Render).
           </p>
         </div>
 
@@ -152,7 +151,7 @@ function ServerSetupScreen({ onDone, onBack }: { onDone: () => void; onBack: () 
               id="server-url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="http://192.168.1.100:81"
+              placeholder="https://synccast-repo.vercel.app"
               className="glass border-white/10"
               autoFocus
               autoCapitalize="none"
@@ -160,7 +159,7 @@ function ServerSetupScreen({ onDone, onBack }: { onDone: () => void; onBack: () 
               spellCheck={false}
             />
             <p className="text-xs text-white/40 mt-2">
-              Ej: <code className="bg-white/5 px-1 py-0.5 rounded">http://IP_DE_TU_PC:81</code> o la URL de Vercel si la desplegaste
+              URL del servidor: <code className="bg-white/5 px-1 py-0.5 rounded">https://synccast-repo.vercel.app</code>
             </p>
           </div>
 
@@ -172,7 +171,7 @@ function ServerSetupScreen({ onDone, onBack }: { onDone: () => void; onBack: () 
           )}
           {testResult === 'fail' && (
             <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30">
-              <p className="text-sm text-destructive">No se pudo conectar al servidor. Verifica la URL y que estés en la misma red WiFi.</p>
+              <p className="text-sm text-destructive">No se pudo conectar. Verifica que la URL esté completa (debe terminar en .vercel.app)</p>
             </div>
           )}
 
@@ -193,7 +192,7 @@ function ServerSetupScreen({ onDone, onBack }: { onDone: () => void; onBack: () 
 
         <div className="mt-6 p-3 rounded-lg bg-primary/5 border border-primary/20">
           <p className="text-xs text-white/70">
-            <strong className="text-primary">Importante:</strong> El servidor debe estar ejecutándose en tu computadora o Raspberry Pi. Para desplegarlo en internet (Vercel + servicio de WebSocket), consulta la documentación.
+            <strong className="text-primary">Servidor por defecto:</strong> Si no sabes qué URL poner, simplemente toca "Guardar". La URL <code className="bg-white/5 px-1 py-0.5 rounded">https://synccast-repo.vercel.app</code> ya está preconfigurada y funciona automáticamente.
           </p>
         </div>
       </Card>
