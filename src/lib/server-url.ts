@@ -1,9 +1,5 @@
 /**
  * Server URL configuration for the SyncCast app.
- *
- * - When running as a web app served by Next.js, this is empty (uses relative URLs)
- * - When running inside the Android APK, the user configures a server URL on first launch
- *   and it's stored in localStorage.
  */
 
 const STORAGE_KEY = 'synccast-server-url'
@@ -13,11 +9,12 @@ export function getServerUrl(): string {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
-      // Remove trailing slash
       return stored.replace(/\/+$/, '')
     }
   } catch {}
-  return ''
+  // Default to production Vercel URL when nothing is configured
+  // (used by the APK on first launch)
+  return 'https://synccast-repo.vercel.app'
 }
 
 export function setServerUrl(url: string): void {
@@ -36,26 +33,39 @@ export function clearServerUrl(): void {
 }
 
 /**
- * Build the socket.io URL for the given (or configured) server.
- * If serverUrl is empty, uses the current origin (Next.js dev/prod server).
- * Otherwise, points to the configured remote server.
- *
- * The XTransformPort query parameter is still appended so the Caddy gateway
- * on the server can route to the sync-service on port 3003.
+ * Build the WebSocket URL.
+ * Priority:
+ * 1. NEXT_PUBLIC_SOCKET_URL env var (production)
+ * 2. User-configured server URL (APK)
+ * 3. Default: same origin with Caddy gateway routing (local dev only)
  */
 export function getSocketUrl(): string {
+  // 1. Environment variable (set in Vercel for production)
+  const envSocketUrl = process.env.NEXT_PUBLIC_SOCKET_URL
+  if (envSocketUrl) {
+    return envSocketUrl.replace(/\/+$/, '')
+  }
+
+  // 2. User-configured server URL (APK mode)
   const serverUrl = getServerUrl()
   if (serverUrl) {
-    // Connect to remote server directly (Caddy will route to sync-service)
-    return `${serverUrl}/?XTransformPort=3003`
+    // The user's URL is Vercel. The WebSocket is on Render (separate service).
+    // For production deployments, the Render URL is configured via env var.
+    // For local dev (with Caddy gateway), use XTransformPort.
+    if (serverUrl.includes('localhost') || serverUrl.includes('127.0.0.1')) {
+      return `${serverUrl}/?XTransformPort=3003`
+    }
+    // For production: if env var is set, use it. Otherwise, fall back to Render URL.
+    // We hardcode the Render URL as a fallback for APK without env var.
+    return 'https://synccast-sync.onrender.com'
   }
-  // Local mode: same origin, gateway handles routing
+
+  // 3. Local mode
   return '/?XTransformPort=3003'
 }
 
 /**
- * Build an API URL. When a server URL is configured (APK mode), prefixes it.
- * Otherwise, returns the relative path (served by Next.js).
+ * Build an API URL.
  */
 export function apiUrl(path: string): string {
   const serverUrl = getServerUrl()
@@ -66,6 +76,4 @@ export function apiUrl(path: string): string {
   return path
 }
 
-// Stub for backward compatibility - not used internally; notifications go through
-// the subscribe/notify functions in use-sync-socket.ts
 export const STORAGE_KEY_OBSERVER = STORAGE_KEY
