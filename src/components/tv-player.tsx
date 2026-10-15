@@ -33,6 +33,71 @@ function loadYouTubeAPI(): Promise<any> {
   return Promise.resolve(null)
 }
 
+// YouTube redirect component - opens YouTube directly
+// This works on ALL smart TVs because it doesn't depend on iframe support
+function YouTubeRedirect({ youtubeId, mediaName, onPlay }: { youtubeId: string; mediaName: string | null; onPlay: () => void }) {
+  const [autoRedirect, setAutoRedirect] = useState(true)
+  const [countdown, setCountdown] = useState(3)
+
+  useEffect(() => {
+    if (!autoRedirect) return
+    const timer = setInterval(() => {
+      setCountdown((c) => {
+        if (c <= 1) {
+          // Auto-redirect to YouTube
+          window.location.href = `https://www.youtube.com/watch?v=${youtubeId}&autoplay=1`
+          return 0
+        }
+        return c - 1
+      })
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [autoRedirect, youtubeId])
+
+  const handleOpenNow = () => {
+    window.location.href = `https://www.youtube.com/watch?v=${youtubeId}&autoplay=1`
+    onPlay()
+  }
+
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-red-900/40 to-black p-8">
+      <div className="w-24 h-24 rounded-2xl bg-red-600 flex items-center justify-center mb-6 glow-strong">
+        <Youtube className="w-12 h-12 text-white" />
+      </div>
+      <h2 className="text-2xl font-bold text-white mb-2 text-center">{mediaName || 'Video de YouTube'}</h2>
+      <p className="text-white/60 mb-6 text-center">Abriendo en YouTube...</p>
+
+      {autoRedirect && (
+        <p className="text-white/40 mb-4 text-sm">
+          Redirigiendo en {countdown}s...
+        </p>
+      )}
+
+      <div className="flex flex-col gap-3 w-full max-w-xs">
+        <button
+          onClick={handleOpenNow}
+          className="w-full px-6 py-4 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold flex items-center justify-center gap-2 transition text-lg"
+          style={{ minHeight: '60px' }}
+          autoFocus
+        >
+          <Youtube className="w-6 h-6" />
+          Abrir en YouTube
+        </button>
+        <button
+          onClick={() => setAutoRedirect(false)}
+          className="w-full px-4 py-2 text-white/40 hover:text-white text-sm transition"
+        >
+          Cancelar auto-redirección
+        </button>
+      </div>
+
+      <p className="text-white/30 mt-6 text-xs text-center max-w-md">
+        El video se abrirá directamente en YouTube para mejor compatibilidad con tu TV.
+      </p>
+    </div>
+  )
+}
+
 interface TvPlayerProps {
   tvId: string
   tvName: string
@@ -386,36 +451,14 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
         />
       )}
       {mediaInfo.mediaType === 'youtube' && mediaInfo.youtubeId && (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-black p-4">
-          {/* Try iframe first (works on most devices) */}
-          <iframe
-            src={`https://www.youtube.com/embed/${mediaInfo.youtubeId}?autoplay=1&rel=0`}
-            className="w-full h-full max-w-[100vw] max-h-[80vh]"
-            style={{ border: 'none' }}
-            allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-            allowFullScreen
-            ref={youtubeContainerRef}
-            onLoad={() => {
-              setLoading(false)
-              setYtReady(true)
-              setIsPlaying(true)
-            }}
-            onError={() => {
-              setLoading(false)
-              setError('No se pudo cargar el video. Usa el botón abajo para abrir en YouTube.')
-            }}
-          />
-          {/* Fallback: big button to open YouTube directly */}
-          <a
-            href={`https://www.youtube.com/watch?v=${mediaInfo.youtubeId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-4 inline-flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition text-base"
-          >
-            <Youtube className="w-5 h-5" />
-            Abrir en YouTube
-          </a>
-        </div>
+        <YouTubeRedirect
+          youtubeId={mediaInfo.youtubeId}
+          mediaName={mediaInfo.mediaName}
+          onPlay={() => {
+            setIsPlaying(true)
+            setShowOverlay(false)
+          }}
+        />
       )}
 
       {/* Audio visualization */}
