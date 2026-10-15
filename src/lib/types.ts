@@ -1,4 +1,4 @@
-export type MediaType = 'video' | 'audio'
+export type MediaType = 'video' | 'audio' | 'youtube'
 
 export interface MediaItem {
   id: string
@@ -7,6 +7,7 @@ export interface MediaItem {
   type: MediaType
   duration: number
   size: number
+  youtubeId?: string
 }
 
 export interface Playlist {
@@ -30,6 +31,7 @@ export interface PlaybackState {
   mediaType: MediaType | null
   mediaName: string | null
   mediaUrl: string | null
+  youtubeId?: string | null
   isPlaying: boolean
   position: number
   duration: number
@@ -53,15 +55,11 @@ export type CommandAction =
   | 'kick-tv'
 
 export interface CommandPayload {
-  // load-playlist
   playlist?: MediaItem[]
   playlistId?: string
   startIndex?: number
-  // play / seek
   position?: number
-  // set-volume
   tvId?: string
   volume?: number
-  // rename-tv
   name?: string
 }

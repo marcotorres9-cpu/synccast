@@ -15,7 +15,7 @@ import {
   Play, Pause, Square, SkipForward, SkipBack, Volume2, VolumeX,
   Upload, Music, Video, Monitor, Trash2, ListMusic, Tv, Settings,
   Plus, Wifi, Loader2, CheckCircle2, AlertCircle, Smartphone,
-  Volume1, Cast, X, Pencil, Server
+  Volume1, Cast, X, Pencil, Server, Youtube, Link as LinkIcon
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { apiUrl, getServerUrl, setServerUrl } from '@/lib/server-url'
@@ -30,6 +30,7 @@ interface MediaFile {
   size: number
   duration?: number
   createdAt?: string
+  youtubeId?: string
 }
 
 export function Controller() {
@@ -44,6 +45,8 @@ export function Controller() {
   const [newTvName, setNewTvName] = useState('')
   const [showServerDialog, setShowServerDialog] = useState(false)
   const [serverUrlInput, setServerUrlInput] = useState('')
+  const [youtubeUrlInput, setYoutubeUrlInput] = useState('')
+  const [addingYoutube, setAddingYoutube] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // --------------------------------------------------------
@@ -133,6 +136,7 @@ export function Controller() {
       url: m.url,
       type: m.type,
       duration: m.duration || 0,
+      youtubeId: m.youtubeId,
     }))
     sendCommand('load-playlist', {
       playlist,
@@ -203,7 +207,35 @@ export function Controller() {
 
   const videoFiles = mediaFiles.filter((f) => f.type === 'video')
   const audioFiles = mediaFiles.filter((f) => f.type === 'audio')
+  const youtubeFiles = mediaFiles.filter((f) => f.type === 'youtube')
   const onlineTvs = tvs.filter((t) => t.isOnline)
+
+  // --------------------------------------------------------
+  // Add YouTube video
+  // --------------------------------------------------------
+  const handleAddYoutube = async () => {
+    if (!youtubeUrlInput.trim()) return
+    setAddingYoutube(true)
+    try {
+      const res = await fetch(apiUrl('/api/youtube'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: youtubeUrlInput.trim() }),
+      })
+      const data = await res.json()
+      if (data.file) {
+        toast.success('Video de YouTube agregado')
+        setYoutubeUrlInput('')
+        await fetchMedia()
+      } else {
+        toast.error(data.error || 'Error al agregar video')
+      }
+    } catch (e: any) {
+      toast.error('Error: ' + e.message)
+    } finally {
+      setAddingYoutube(false)
+    }
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -246,7 +278,7 @@ export function Controller() {
       {/* Main content */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 py-6 pb-24">
         <Tabs value={tab} onValueChange={setTab} className="w-full">
-          <TabsList className="grid grid-cols-4 w-full glass">
+          <TabsList className="grid grid-cols-5 w-full glass">
             <TabsTrigger value="player" className="data-[state=active]:bg-primary/20">
               <Play className="w-4 h-4 mr-1.5" /> Reproductor
             </TabsTrigger>
@@ -255,6 +287,9 @@ export function Controller() {
             </TabsTrigger>
             <TabsTrigger value="music" className="data-[state=active]:bg-primary/20">
               <Music className="w-4 h-4 mr-1.5" /> Música
+            </TabsTrigger>
+            <TabsTrigger value="youtube" className="data-[state=active]:bg-primary/20">
+              <Youtube className="w-4 h-4 mr-1.5" /> YouTube
             </TabsTrigger>
             <TabsTrigger value="tvs" className="data-[state=active]:bg-primary/20">
               <Tv className="w-4 h-4 mr-1.5" /> TVs ({onlineTvs.length})
@@ -613,6 +648,121 @@ export function Controller() {
                 <p className="text-xs text-white/60 mt-3 flex items-center gap-1.5">
                   <ListMusic className="w-3 h-3" />
                   {selectedMedia.length} canciones - se reproducirán como lista de reproducción
+                </p>
+              )}
+            </Card>
+          </TabsContent>
+
+          {/* YOUTUBE TAB */}
+          <TabsContent value="youtube" className="space-y-4 mt-4">
+            <Card className="glass-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <Label className="text-base font-semibold text-white flex items-center gap-2">
+                  <Youtube className="w-4 h-4 text-red-500" />
+                  Agregar Video de YouTube
+                </Label>
+              </div>
+              <div className="space-y-3">
+                <Input
+                  placeholder="Pega aquí la URL de YouTube (ej: https://youtu.be/dQw4w9WgXcQ)"
+                  className="glass border-white/10"
+                  value={youtubeUrlInput}
+                  onChange={(e) => setYoutubeUrlInput(e.target.value)}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+                <Button
+                  onClick={handleAddYoutube}
+                  disabled={!youtubeUrlInput.trim() || addingYoutube}
+                  className="w-full bg-red-600 hover:bg-red-700"
+                >
+                  {addingYoutube ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Agregando...</>
+                  ) : (
+                    <><Plus className="w-4 h-4 mr-2" /> Agregar a la biblioteca</>
+                  )}
+                </Button>
+                <p className="text-xs text-white/50">
+                  La resolución se ajustará automáticamente a la máxima que soporte cada dispositivo
+                </p>
+              </div>
+            </Card>
+
+            <Card className="glass-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <Label className="text-base font-semibold text-white flex items-center gap-2">
+                  <Youtube className="w-4 h-4 text-red-500" />
+                  Biblioteca de YouTube ({youtubeFiles.length})
+                </Label>
+                {selectedMedia.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={() => startPlayback(selectedMedia)}
+                    className="bg-primary glow"
+                  >
+                    <Cast className="w-4 h-4 mr-1" />
+                    Reproducir en {onlineTvs.length} TV(s)
+                  </Button>
+                )}
+              </div>
+              <ScrollArea className="h-96 pr-2">
+                <div className="space-y-2">
+                  {youtubeFiles.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Youtube className="w-12 h-12 text-white/20 mx-auto mb-3" />
+                      <p className="text-white/40">No hay videos de YouTube agregados</p>
+                      <p className="text-xs text-white/30 mt-1">Pega una URL arriba para comenzar</p>
+                    </div>
+                  ) : (
+                    youtubeFiles.map((file) => (
+                      <div
+                        key={file.id}
+                        className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                          selectedMedia.find((m) => m.id === file.id)
+                            ? 'glass border-red-500 bg-red-500/10'
+                            : 'glass border-white/5 hover:border-white/20'
+                        }`}
+                        onClick={() => {
+                          setSelectedMedia((prev) =>
+                            prev.find((m) => m.id === file.id)
+                              ? prev.filter((m) => m.id !== file.id)
+                              : [...prev, file]
+                          )
+                        }}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded bg-gradient-to-br from-red-600/40 to-pink-600/30 flex items-center justify-center flex-shrink-0">
+                            <Youtube className="w-5 h-5 text-red-500" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-white truncate">{file.name}</p>
+                            <p className="text-xs text-white/50">YouTube · {file.youtubeId}</p>
+                          </div>
+                          {selectedMedia.find((m) => m.id === file.id) && (
+                            <CheckCircle2 className="w-5 h-5 text-red-500 flex-shrink-0" />
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-white/40 hover:text-destructive hover:bg-destructive/10 h-8 w-8"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDeleteMedia(file.id)
+                            }}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </ScrollArea>
+              {selectedMedia.length > 1 && (
+                <p className="text-xs text-white/60 mt-3 flex items-center gap-1.5">
+                  <ListMusic className="w-3 h-3" />
+                  {selectedMedia.length} videos seleccionados - se reproducirán en orden
                 </p>
               )}
             </Card>

@@ -22,22 +22,23 @@ model Tv {
 }
 
 model MediaFile {
-  id        String   @id @default(cuid())
-  name      String
-  filename  String
-  filePath  String
-  size      Int
-  mimeType  String
-  duration  Float?
-  type      String // 'video' | 'audio'
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(cuid())
+  name       String
+  filename   String
+  filePath   String
+  size       Int
+  mimeType   String
+  duration   Float?
+  type       String   // 'video' | 'audio' | 'youtube'
+  youtubeId  String?  // For YouTube videos: stores the video ID
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model Playlist {
   id        String   @id @default(cuid())
   name      String
-  type      String // 'video' | 'audio'
+  type      String // 'video' | 'audio' | 'youtube'
   items     String // JSON string of media IDs in order
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

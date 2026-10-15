@@ -17,6 +17,7 @@ let playbackState = {
   mediaType: null,
   mediaName: null,
   mediaUrl: null,
+  youtubeId: null,
   isPlaying: false,
   position: 0,
   duration: 0,
@@ -76,6 +77,7 @@ function handleCommand(socketId, action, payload) {
         mediaType: playlist[startIndex]?.type || null,
         mediaName: playlist[startIndex]?.name || null,
         mediaUrl: playlist[startIndex]?.url || null,
+        youtubeId: playlist[startIndex]?.youtubeId || null,
         isPlaying: false,
         position: 0,
         duration: playlist[startIndex]?.duration || 0,
@@ -149,6 +151,7 @@ function handleCommand(socketId, action, payload) {
         playbackState.mediaType = item.type
         playbackState.mediaName = item.name
         playbackState.mediaUrl = item.url
+        playbackState.youtubeId = item.youtubeId || null
         playbackState.duration = item.duration
         playbackState.position = 0
         playbackState.targetPosition = 0
@@ -188,6 +191,7 @@ function handleCommand(socketId, action, payload) {
         playbackState.mediaType = item.type
         playbackState.mediaName = item.name
         playbackState.mediaUrl = item.url
+        playbackState.youtubeId = item.youtubeId || null
         playbackState.duration = item.duration
         playbackState.position = 0
         playbackState.targetPosition = 0
