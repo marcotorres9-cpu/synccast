@@ -1,16 +1,14 @@
 /**
- * Auto-updater for SyncCast APK
- * Uses a simple version check + download mechanism.
- *
- * On app start:
- * 1. Check latest version from GitHub releases
- * 2. If newer version available, download in background
- * 3. Show notification when ready
- * 4. Apply on next app launch
+ * Version checker for SyncCast
+ * Checks the deployed web version and GitHub releases
  */
 
 const GITHUB_RELEASES_URL = 'https://api.github.com/repos/marcotorres9-cpu/synccast/releases/latest'
-const CURRENT_VERSION = '1.2.3' // Must match package.json / build.gradle
+const WEB_VERSION_URL = 'https://synccast-repo.vercel.app/api/version'
+
+// This version is set at BUILD TIME of the APK
+// It's injected via env var NEXT_PUBLIC_APP_VERSION
+const CURRENT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.2.3'
 
 export interface UpdateInfo {
   version: string
@@ -18,23 +16,49 @@ export interface UpdateInfo {
   size: number
   releaseNotes: string
   publishedAt: string
+  source: 'github' | 'web'
 }
 
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
   try {
+    // First check the web version (faster, more reliable)
+    const webResponse = await fetch(WEB_VERSION_URL, { cache: 'no-store' })
+    if (webResponse.ok) {
+      const webData = await webResponse.json()
+      const webVersion = webData.version
+
+      if (compareVersions(webVersion, CURRENT_VERSION) > 0) {
+        // Web has a newer version, find the download URL from GitHub
+        const ghResponse = await fetch(GITHUB_RELEASES_URL)
+        if (ghResponse.ok) {
+          const release = await ghResponse.json()
+          const apkAsset = release.assets?.find((a: any) => a.name.endsWith('.apk'))
+          if (apkAsset) {
+            return {
+              version: webVersion,
+              downloadUrl: apkAsset.browser_download_url,
+              size: apkAsset.size,
+              releaseNotes: webData.changelog || release.body || '',
+              publishedAt: webData.deployedAt || release.published_at || '',
+              source: 'web',
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback: check GitHub releases directly
     const response = await fetch(GITHUB_RELEASES_URL)
     if (!response.ok) return null
     const release = await response.json()
 
-    // Get the latest APK asset
     const apkAsset = release.assets?.find((a: any) => a.name.endsWith('.apk'))
     if (!apkAsset) return null
 
     const latestVersion = release.tag_name?.replace(/^v/, '') || '0.0.0'
 
-    // Compare versions
     if (compareVersions(latestVersion, CURRENT_VERSION) <= 0) {
-      return null // Already up to date
+      return null
     }
 
     return {
@@ -43,6 +67,7 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
       size: apkAsset.size,
       releaseNotes: release.body || '',
       publishedAt: release.published_at || '',
+      source: 'github',
     }
   } catch (e) {
     console.error('Update check failed:', e)
@@ -62,8 +87,8 @@ function compareVersions(v1: string, v2: string): number {
   return 0
 }
 
-// Store update info in localStorage so the UI can access it
 const UPDATE_KEY = 'synccast-pending-update'
+const DISMISSED_KEY = 'synccast-update-dismissed'
 
 export function getPendingUpdate(): UpdateInfo | null {
   if (typeof window === 'undefined') return null
@@ -79,9 +104,25 @@ export function setPendingUpdate(update: UpdateInfo | null): void {
   try {
     if (update) {
       localStorage.setItem(UPDATE_KEY, JSON.stringify(update))
+      localStorage.removeItem(DISMISSED_KEY)
     } else {
       localStorage.removeItem(UPDATE_KEY)
     }
+  } catch {}
+}
+
+export function isUpdateDismissed(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return localStorage.getItem(DISMISSED_KEY) === 'true'
+  } catch {}
+  return false
+}
+
+export function dismissUpdate(): void {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(DISMISSED_KEY, 'true')
   } catch {}
 }
 

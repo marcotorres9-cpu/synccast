@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { X, Download, RefreshCw, Sparkles } from 'lucide-react'
-import { checkForUpdate, getPendingUpdate, setPendingUpdate, getCurrentVersion, type UpdateInfo } from '@/lib/auto-updater'
+import { checkForUpdate, getPendingUpdate, setPendingUpdate, getCurrentVersion, dismissUpdate, isUpdateDismissed, type UpdateInfo } from '@/lib/auto-updater'
 
 export function UpdateNotification() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null)
@@ -13,6 +13,9 @@ export function UpdateNotification() {
   const [downloadProgress, setDownloadProgress] = useState(0)
 
   useEffect(() => {
+    // If user dismissed, don't show again
+    if (isUpdateDismissed()) return
+
     // Check for pending update first
     const pending = getPendingUpdate()
     if (pending) {
@@ -81,6 +84,7 @@ export function UpdateNotification() {
 
   const handleDismiss = () => {
     setDismissed(true)
+    dismissUpdate()
   }
 
   if (!update || dismissed) return null

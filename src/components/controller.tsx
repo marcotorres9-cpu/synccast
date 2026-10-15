@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { apiUrl, getServerUrl, setServerUrl } from '@/lib/server-url'
+import { getCurrentVersion } from '@/lib/auto-updater'
 import { notifyServerUrlChanged } from '@/hooks/use-sync-socket'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
@@ -255,6 +256,9 @@ export function Controller() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <span className="text-xs text-white/40 hidden sm:inline" title="Versión de la app">
+              v{getCurrentVersion()}
+            </span>
             <Button
               variant="ghost"
               size="sm"
