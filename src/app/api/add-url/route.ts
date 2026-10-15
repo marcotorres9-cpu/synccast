@@ -9,8 +9,8 @@ export async function OPTIONS() {
     status: 200,
     headers: {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
     },
   })
 }
@@ -21,8 +21,10 @@ export async function POST(req: NextRequest) {
     if (!url) {
       return NextResponse.json({ error: 'URL is required' }, { status: 400 })
     }
+
+    // Determine type from URL extension
     const resolvedType = type || (url.match(/\.(mp3|wav|ogg|m4a|flac|aac)$/i) ? 'audio' : 'video')
-    const fileName = name || url.split('/').pop() || 'External Media'
+    const fileName = name || url.split('/').pop()?.split('?')[0] || 'External Media'
 
     const media = await db.mediaFile.create({
       data: {

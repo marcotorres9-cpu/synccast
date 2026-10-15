@@ -218,14 +218,19 @@ export function Controller() {
     if (!youtubeUrlInput.trim()) return
     setAddingYoutube(true)
     try {
-      const res = await fetch(apiUrl('/api/youtube'), {
+      // Try to download as MP4 first (works on all TVs)
+      const res = await fetch(apiUrl('/api/youtube-download'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: youtubeUrlInput.trim() }),
       })
       const data = await res.json()
       if (data.file) {
-        toast.success('Video de YouTube agregado')
+        if (data.file.type === 'video') {
+          toast.success('Video descargado como MP4 - se reproducirá en todas las TVs')
+        } else {
+          toast.success('Video agregado (como enlace de YouTube)')
+        }
         setYoutubeUrlInput('')
         await fetchMedia()
       } else {
