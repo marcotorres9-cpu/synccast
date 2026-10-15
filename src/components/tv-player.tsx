@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTvSocket } from '@/hooks/use-sync-socket'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Wifi, Volume2, VolumeX, Monitor, Music, Video, Youtube, AlertCircle, Loader2 } from 'lucide-react'
+import { Wifi, Volume2, VolumeX, Monitor, Music, Video, Youtube, AlertCircle, Loader2, Play } from 'lucide-react'
 import { getServerUrl } from '@/lib/server-url'
 
 function resolveMediaUrl(url: string | null | undefined): string | null {
@@ -17,7 +17,6 @@ function resolveMediaUrl(url: string | null | undefined): string | null {
   return url
 }
 
-// Declare YouTube IFrame API
 declare global {
   interface Window {
     YT?: any
@@ -30,13 +29,17 @@ function loadYouTubeAPI(): Promise<any> {
   if (typeof window === 'undefined') return Promise.reject()
   if (window.YT && window.YT.Player) return Promise.resolve(window.YT)
   if (ytApiPromise) return ytApiPromise
-
-  ytApiPromise = new Promise((resolve) => {
+  ytApiPromise = new Promise((resolve, reject) => {
     const tag = document.createElement('script')
     tag.src = 'https://www.youtube.com/iframe_api'
+    tag.onerror = () => reject(new Error('Failed to load YouTube API'))
     const firstScriptTag = document.getElementsByTagName('script')[0]
     firstScriptTag?.parentNode?.insertBefore(tag, firstScriptTag)
-    window.onYouTubeIframeAPIReady = () => resolve(window.YT)
+    const timeout = setTimeout(() => reject(new Error('YouTube API timeout')), 15000)
+    window.onYouTubeIframeAPIReady = () => {
+      clearTimeout(timeout)
+      resolve(window.YT)
+    }
   })
   return ytApiPromise
 }
@@ -50,14 +53,11 @@ interface TvPlayerProps {
 export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
-  const youtubeRef = useRef<HTMLDivElement>(null)
+  const youtubeContainerRef = useRef<HTMLDivElement>(null)
+  const youtubeDivRef = useRef<HTMLDivElement>(null)
   const ytPlayerRef = useRef<any>(null)
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const pendingAutoPlayRef = useRef<{ targetPlayAt: number } | null>(null)
-  const pendingSyncPlayRef = useRef<{ targetPlayAt: number; position: number } | null>(null)
-  const pendingSyncSeekRef = useRef<any>(null)
-  const ytReadyRef = useRef(false)
-  const ytCurrentVideoRef = useRef<string | null>(null)
+  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -73,6 +73,7 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   const [error, setError] = useState<string | null>(null)
   const [showOverlay, setShowOverlay] = useState(true)
   const [loading, setLoading] = useState(false)
+  const [ytReady, setYtReady] = useState(false)
 
   const {
     isConnected,
@@ -90,173 +91,44 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     reportEnded,
   } = useTvSocket(tvName, tvId)
 
+  // Clear loading after 15 seconds if YouTube doesn't load
+  useEffect(() => {
+    if (loading) {
+      loadingTimeoutRef.current = setTimeout(() => {
+        setLoading(false)
+        if (mediaInfo.mediaType === 'youtube' && !ytReady) {
+          setError('YouTube tardó demasiado en cargar. Toca la pantalla para reintentar.')
+        }
+      }, 15000)
+    }
+    return () => {
+      if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current)
+    }
+  }, [loading, mediaInfo.mediaType, ytReady])
+
   // Apply volume
   useEffect(() => {
     const v = muted ? 0 : volume / 100
     if (videoRef.current) videoRef.current.volume = v
     if (audioRef.current) audioRef.current.volume = v
-    if (ytPlayerRef.current && ytReadyRef.current) {
+    if (ytPlayerRef.current && ytReady) {
       try {
         ytPlayerRef.current.setVolume(volume)
         if (muted) ytPlayerRef.current.mute()
         else ytPlayerRef.current.unMute()
       } catch {}
     }
-  }, [volume, muted])
+  }, [volume, muted, ytReady])
 
-  // Initialize YouTube player when needed
-  useEffect(() => {
-    if (mediaInfo.mediaType !== 'youtube' || !mediaInfo.youtubeId) return
-    if (!youtubeRef.current) return
-
-    let cancelled = false
-
-    const initYt = async () => {
-      try {
-        const YT = await loadYouTubeAPI()
-        if (cancelled) return
-
-        // Destroy existing player if any
-        if (ytPlayerRef.current) {
-          try { ytPlayerRef.current.destroy() } catch {}
-          ytPlayerRef.current = null
-        }
-
-        ytPlayerRef.current = new YT.Player(youtubeRef.current, {
-          videoId: mediaInfo.youtubeId!,
-          playerVars: {
-            autoplay: 0,
-            controls: 0,
-            disablekb: 1,
-            fs: 0,
-            modestbranding: 1,
-            playsinline: 1,
-            rel: 0,
-            // Quality hint - YouTube will auto-select based on connection
-            vq: 'highres',
-          },
-          events: {
-            onReady: (e: any) => {
-              ytReadyRef.current = true
-              setLoading(false)
-              try {
-                e.target.setVolume(muted ? 0 : volume)
-                // Try to set highest quality
-                const qualities = ['hd2160', 'hd1440', 'hd1080', 'hd720', 'large', 'medium']
-                for (const q of qualities) {
-                  try {
-                    e.target.setPlaybackQuality(q)
-                    break
-                  } catch {}
-                }
-              } catch {}
-
-              // Get duration
-              try {
-                const dur = e.target.getDuration()
-                if (dur) {
-                  setDuration(dur)
-                  reportDuration(dur)
-                }
-              } catch {}
-
-              // Handle pending autoplay
-              const ap = pendingAutoPlayRef.current
-              if (ap) {
-                pendingAutoPlayRef.current = null
-                const wait = getWaitUntil(ap.targetPlayAt)
-                setTimeout(() => {
-                  if (cancelled) return
-                  try {
-                    e.target.seekTo(0, true)
-                    e.target.playVideo()
-                    setIsPlaying(true)
-                  } catch {}
-                }, Math.max(0, wait))
-              }
-
-              // Handle pending sync-play
-              const sp = pendingSyncPlayRef.current
-              if (sp) {
-                pendingSyncPlayRef.current = null
-                try {
-                  e.target.seekTo(sp.position, true)
-                } catch {}
-                const wait = getWaitUntil(sp.targetPlayAt)
-                setTimeout(() => {
-                  if (cancelled) return
-                  try {
-                    e.target.playVideo()
-                    setIsPlaying(true)
-                    setShowOverlay(false)
-                  } catch {}
-                }, Math.max(0, wait))
-              }
-
-              // Handle pending sync-seek
-              const ss = pendingSyncSeekRef.current
-              if (ss) {
-                pendingSyncSeekRef.current = null
-                try {
-                  e.target.seekTo(ss.position, true)
-                } catch {}
-                if (ss.isPlaying && ss.targetPlayAt) {
-                  const wait = getWaitUntil(ss.targetPlayAt)
-                  setTimeout(() => {
-                    if (cancelled) return
-                    try { e.target.playVideo(); setIsPlaying(true) } catch {}
-                  }, Math.max(0, wait))
-                }
-              }
-            },
-            onStateChange: (e: any) => {
-              const YT_STATE = {
-                UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5,
-              }
-              if (e.data === YT_STATE.PLAYING) {
-                setIsPlaying(true)
-              } else if (e.data === YT_STATE.PAUSED) {
-                setIsPlaying(false)
-              } else if (e.data === YT_STATE.ENDED) {
-                setIsPlaying(false)
-                if (mediaInfo.mediaId) reportEnded(mediaInfo.mediaId)
-              } else if (e.data === YT_STATE.BUFFERING) {
-                setLoading(true)
-              }
-            },
-            onError: (e: any) => {
-              console.error('YouTube player error:', e.data)
-              setError('Error al reproducir video de YouTube')
-              setLoading(false)
-            },
-          },
-        })
-      } catch (e) {
-        console.error('Failed to init YouTube player:', e)
-        setError('No se pudo cargar el reproductor de YouTube')
-        setLoading(false)
-      }
-    }
-    initYt()
-
-    return () => {
-      cancelled = true
-      if (ytPlayerRef.current) {
-        try { ytPlayerRef.current.destroy() } catch {}
-        ytPlayerRef.current = null
-      }
-      ytReadyRef.current = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaInfo.youtubeId, mediaInfo.mediaType])
-
-  // Load media
+  // Load media effect
   useEffect(() => {
     if (!loadMediaData) return
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoading(true)
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setError(null)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setYtReady(false)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(true)
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMediaInfo({
       mediaId: loadMediaData.mediaId,
@@ -271,26 +143,112 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     setDuration(loadMediaData.duration || 0)
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsPlaying(false)
-
-    if (loadMediaData.autoPlay && loadMediaData.targetPlayAt) {
-      pendingAutoPlayRef.current = { targetPlayAt: loadMediaData.targetPlayAt }
-    } else {
-      pendingAutoPlayRef.current = null
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadMediaData])
 
-  // For video/audio elements (not YouTube)
+  // YouTube player initialization - runs when youtubeId changes
+  useEffect(() => {
+    if (mediaInfo.mediaType !== 'youtube' || !mediaInfo.youtubeId) return
+    // Wait for the div to be rendered
+    const timer = setTimeout(() => {
+      if (!youtubeDivRef.current) {
+        console.error('YouTube div not in DOM yet')
+        return
+      }
+      let cancelled = false
+      const initYt = async () => {
+        try {
+          const YT = await loadYouTubeAPI()
+          if (cancelled) return
+          // Destroy existing
+          if (ytPlayerRef.current) {
+            try { ytPlayerRef.current.destroy() } catch {}
+            ytPlayerRef.current = null
+          }
+          // Create new div to ensure clean state
+          const newDiv = document.createElement('div')
+          youtubeDivRef.current.innerHTML = ''
+          youtubeDivRef.current.appendChild(newDiv)
+
+          ytPlayerRef.current = new YT.Player(newDiv, {
+            videoId: mediaInfo.youtubeId,
+            playerVars: {
+              autoplay: 0,
+              controls: 0,
+              disablekb: 1,
+              fs: 0,
+              modestbranding: 1,
+              playsinline: 1,
+              rel: 0,
+              origin: typeof window !== 'undefined' ? window.location.origin : undefined,
+            },
+            events: {
+              onReady: (e: any) => {
+                if (cancelled) return
+                setYtReady(true)
+                // eslint-disable-next-line react-hooks/set-state-in-effect
+                setLoading(false)
+                try {
+                  e.target.setVolume(muted ? 0 : volume)
+                } catch {}
+                try {
+                  const dur = e.target.getDuration()
+                  if (dur) {
+                    // eslint-disable-next-line react-hooks/set-state-in-effect
+                    setDuration(dur)
+                    reportDuration(dur)
+                  }
+                } catch {}
+              },
+              onStateChange: (e: any) => {
+                const YT_STATE = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 }
+                if (e.data === YT_STATE.PLAYING) {
+                  setIsPlaying(true)
+                  // eslint-disable-next-line react-hooks/set-state-in-effect
+                  setLoading(false)
+                } else if (e.data === YT_STATE.PAUSED) {
+                  setIsPlaying(false)
+                } else if (e.data === YT_STATE.ENDED) {
+                  setIsPlaying(false)
+                  if (mediaInfo.mediaId) reportEnded(mediaInfo.mediaId)
+                }
+              },
+              onError: (e: any) => {
+                console.error('YouTube error:', e.data)
+                setError('Error al cargar el video de YouTube (código: ' + e.data + ')')
+                // eslint-disable-next-line react-hooks/set-state-in-effect
+                setLoading(false)
+              },
+            },
+          })
+        } catch (e: any) {
+          console.error('Failed to init YouTube:', e)
+          setError(e.message || 'No se pudo cargar el reproductor de YouTube')
+          // eslint-disable-next-line react-hooks/set-state-in-effect
+          setLoading(false)
+        }
+      }
+      initYt()
+      return () => { cancelled = true }
+    }, 100)
+    return () => {
+      clearTimeout(timer)
+      if (ytPlayerRef.current) {
+        try { ytPlayerRef.current.destroy() } catch {}
+        ytPlayerRef.current = null
+      }
+      setYtReady(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaInfo.youtubeId, mediaInfo.mediaType])
+
+  // Video/audio element loadedmetadata
   useEffect(() => {
     if (!mediaInfo.mediaUrl || !mediaInfo.mediaType) return
     if (mediaInfo.mediaType === 'youtube') return
-
     const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
     if (!targetEl) return
-
-    let cancelled = false
     const onLoaded = () => {
-      if (cancelled) return
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(false)
       if (targetEl.duration && !isNaN(targetEl.duration)) {
@@ -298,71 +256,13 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
         setDuration(targetEl.duration)
         reportDuration(targetEl.duration)
       }
-
-      const ap = pendingAutoPlayRef.current
-      if (ap) {
-        pendingAutoPlayRef.current = null
-        const wait = getWaitUntil(ap.targetPlayAt)
-        setTimeout(() => {
-          if (cancelled) return
-          targetEl.currentTime = 0
-          targetEl.play().then(() => {
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            setIsPlaying(true)
-          }).catch((e) => {
-            console.error('Autoplay error:', e)
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            setError('No se pudo reproducir automáticamente. Toca la pantalla para iniciar.')
-          })
-        }, Math.max(0, wait))
-      }
-
-      const sp = pendingSyncPlayRef.current
-      if (sp) {
-        pendingSyncPlayRef.current = null
-        targetEl.currentTime = sp.position
-        const wait = getWaitUntil(sp.targetPlayAt)
-        setTimeout(() => {
-          if (cancelled) return
-          targetEl.play().then(() => {
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            setIsPlaying(true)
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            setShowOverlay(false)
-          }).catch((e) => {
-            console.error('Sync play error:', e)
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            setError('No se pudo reproducir. Toca la pantalla.')
-          })
-        }, Math.max(0, wait))
-      }
-
-      const ss = pendingSyncSeekRef.current
-      if (ss) {
-        pendingSyncSeekRef.current = null
-        targetEl.currentTime = ss.position
-        if (ss.isPlaying && ss.targetPlayAt) {
-          const wait = getWaitUntil(ss.targetPlayAt)
-          setTimeout(() => {
-            if (cancelled) return
-            targetEl.play().then(() => {
-              // eslint-disable-next-line react-hooks/set-state-in-effect
-              setIsPlaying(true)
-            }).catch(() => {})
-          }, Math.max(0, wait))
-        }
-      }
     }
-
     if (targetEl.readyState >= 1) {
       onLoaded()
     } else {
       targetEl.addEventListener('loadedmetadata', onLoaded, { once: true })
     }
-    return () => {
-      cancelled = true
-      targetEl.removeEventListener('loadedmetadata', onLoaded)
-    }
+    return () => targetEl.removeEventListener('loadedmetadata', onLoaded)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaInfo.mediaUrl, mediaInfo.mediaType])
 
@@ -370,19 +270,14 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   useEffect(() => {
     if (!syncPlay) return
     if (mediaInfo.mediaType === 'youtube') {
-      if (!ytReadyRef.current || !ytPlayerRef.current) {
-        pendingSyncPlayRef.current = syncPlay
-        return
-      }
+      if (!ytReady || !ytPlayerRef.current) return
       try {
         ytPlayerRef.current.seekTo(syncPlay.position, true)
         const wait = getWaitUntil(syncPlay.targetPlayAt)
         setTimeout(() => {
           try {
             ytPlayerRef.current.playVideo()
-            // eslint-disable-next-line react-hooks/set-state-in-effect
             setIsPlaying(true)
-            // eslint-disable-next-line react-hooks/set-state-in-effect
             setShowOverlay(false)
           } catch {}
         }, Math.max(0, wait))
@@ -390,40 +285,32 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
       return
     }
     const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
-    if (!targetEl || !mediaInfo.mediaUrl) {
-      pendingSyncPlayRef.current = syncPlay
-      return
-    }
-    if (targetEl.readyState >= 1) {
-      targetEl.currentTime = syncPlay.position
-      const wait = getWaitUntil(syncPlay.targetPlayAt)
-      setTimeout(() => {
-        targetEl.play().then(() => {
-          // eslint-disable-next-line react-hooks/set-state-in-effect
-          setIsPlaying(true)
-          // eslint-disable-next-line react-hooks/set-state-in-effect
-          setShowOverlay(false)
-        }).catch((e) => {
-          console.error('Sync play error:', e)
-          // eslint-disable-next-line react-hooks/set-state-in-effect
-          setError('No se pudo reproducir. Toca la pantalla.')
-        })
-      }, Math.max(0, wait))
-    } else {
-      pendingSyncPlayRef.current = syncPlay
-    }
+    if (!targetEl || !mediaInfo.mediaUrl) return
+    targetEl.currentTime = syncPlay.position
+    const wait = getWaitUntil(syncPlay.targetPlayAt)
+    setTimeout(() => {
+      targetEl.play().then(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setIsPlaying(true)
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setShowOverlay(false)
+      }).catch((e) => {
+        console.error('Sync play error:', e)
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setError('No se pudo reproducir. Toca la pantalla.')
+      })
+    }, Math.max(0, wait))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [syncPlay])
+  }, [syncPlay, ytReady])
 
   // Sync pause
   useEffect(() => {
     if (!syncPause) return
-    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReadyRef.current) {
+    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
       try {
         ytPlayerRef.current.pauseVideo()
         ytPlayerRef.current.seekTo(syncPause.position, true)
       } catch {}
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsPlaying(false)
       return
     }
@@ -439,7 +326,7 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   // Sync seek
   useEffect(() => {
     if (!syncSeek) return
-    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReadyRef.current) {
+    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
       try {
         ytPlayerRef.current.seekTo(syncSeek.position, true)
         // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -457,10 +344,7 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
       return
     }
     const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
-    if (!targetEl) {
-      pendingSyncSeekRef.current = syncSeek
-      return
-    }
+    if (!targetEl) return
     targetEl.currentTime = syncSeek.position
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCurrentTime(syncSeek.position)
@@ -483,10 +367,8 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   // Sync stop
   useEffect(() => {
     if (syncStop === null) return
-    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReadyRef.current) {
-      try {
-        ytPlayerRef.current.stopVideo()
-      } catch {}
+    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
+      try { ytPlayerRef.current.stopVideo() } catch {}
     } else {
       const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
       if (targetEl) {
@@ -506,11 +388,11 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     if (forceDisconnect) onExit()
   }, [forceDisconnect, onExit])
 
-  // Report progress periodically
+  // Report progress
   useEffect(() => {
     if (progressIntervalRef.current) clearInterval(progressIntervalRef.current)
     progressIntervalRef.current = setInterval(() => {
-      if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReadyRef.current) {
+      if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
         try {
           const t = ytPlayerRef.current.getCurrentTime()
           const isPlaying = ytPlayerRef.current.getPlayerState() === 1
@@ -533,9 +415,8 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaInfo.mediaType, reportProgress])
+  }, [mediaInfo.mediaType, ytReady, reportProgress])
 
-  // Media ended (for video/audio only - YouTube handles its own)
   const handleEnded = useCallback(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsPlaying(false)
@@ -548,9 +429,10 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   }, [])
 
   const handleManualPlay = useCallback(() => {
-    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReadyRef.current) {
+    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
       try {
-        if (ytPlayerRef.current.getPlayerState() === 1) {
+        const state = ytPlayerRef.current.getPlayerState()
+        if (state === 1) {
           ytPlayerRef.current.pauseVideo()
           setIsPlaying(false)
         } else {
@@ -575,7 +457,7 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsPlaying(false)
     }
-  }, [mediaInfo.mediaType])
+  }, [mediaInfo.mediaType, ytReady])
 
   const formatTime = (s: number) => {
     if (!s || isNaN(s)) return '0:00'
@@ -590,6 +472,8 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     if (mediaInfo.mediaType === 'audio') return <Music className="w-5 h-5 text-primary" />
     return null
   }
+
+  const hasMedia = mediaInfo.mediaUrl || mediaInfo.youtubeId
 
   return (
     <div className="fixed inset-0 bg-black flex flex-col items-center justify-center">
@@ -614,9 +498,9 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
         />
       )}
       {mediaInfo.mediaType === 'youtube' && mediaInfo.youtubeId && (
-        <div className="w-full h-full flex items-center justify-center">
+        <div ref={youtubeContainerRef} className="w-full h-full flex items-center justify-center">
           <div className="w-full h-full max-w-[100vw] max-h-[100vh]">
-            <div ref={youtubeRef} className="w-full h-full" />
+            <div ref={youtubeDivRef} className="w-full h-full" />
           </div>
         </div>
       )}
@@ -648,10 +532,18 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
 
       {/* Error overlay */}
       {error && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 max-w-md">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 max-w-md w-full px-4">
           <Card className="glass-card p-4 flex items-center gap-3 border-destructive/50">
             <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0" />
-            <p className="text-sm text-white/90">{error}</p>
+            <p className="text-sm text-white/90 flex-1">{error}</p>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setError(null)}
+              className="text-white/60 hover:text-white"
+            >
+              ✕
+            </Button>
           </Card>
         </div>
       )}
@@ -697,7 +589,7 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
       </div>
 
       {/* Bottom info bar */}
-      {mediaInfo.mediaUrl && (
+      {hasMedia && (
         <div className={`absolute bottom-0 left-0 right-0 z-10 transition-opacity ${showOverlay ? 'opacity-100' : 'opacity-0'}`}>
           <div className="glass px-6 py-4">
             <div className="flex items-center gap-4 mb-3">
@@ -719,12 +611,24 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
               </div>
               <span className="text-xs text-white/60">Volumen: {muted ? 0 : volume}%</span>
             </div>
+            {!isPlaying && !loading && hasMedia && (
+              <div className="mt-3 flex justify-center">
+                <Button
+                  onClick={handleManualPlay}
+                  size="sm"
+                  className="bg-primary text-white"
+                >
+                  <Play className="w-4 h-4 mr-1.5" />
+                  Toca para reproducir
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* No media state */}
-      {!mediaInfo.mediaUrl && !mediaInfo.youtubeId && !loading && (
+      {!hasMedia && !loading && (
         <div className="text-center max-w-md px-6">
           <div className="mb-6 flex justify-center">
             <div className="w-32 h-32 rounded-full glass-card flex items-center justify-center glow">
@@ -744,13 +648,13 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
       )}
 
       {/* Click catcher */}
-      {mediaInfo.mediaUrl && (
+      {hasMedia && (
         <div
           className="absolute inset-0 z-0"
-          onClick={(e) => {
+          onClick={() => {
             handleScreenClick()
-            const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
-            if (targetEl && targetEl.paused) {
+            // If paused and not loading, also try to play
+            if (!isPlaying && !loading) {
               handleManualPlay()
             }
           }}
