@@ -1,98 +1,83 @@
 /**
- * Native WebSocket client wrapper that mimics the socket.io-client interface
- * used by the app. This allows us to use a zero-dependency WebSocket server.
+ * Socket.io client wrapper that mimics the previous WSClient interface.
+ * Uses socket.io-client which works through any HTTP proxy with polling fallback.
  */
+
+import { io, Socket } from 'socket.io-client'
+import { getServerUrl } from './server-url'
 
 type EventHandler = (data: any) => void
 
 export class WSClient {
-  private ws: WebSocket | null = null
-  private url: string
+  private socket: Socket | null = null
+  private socketUrl: string
   private listeners: Map<string, Set<EventHandler>> = new Map()
   private connectListeners: Set<() => void> = new Set()
   private disconnectListeners: Set<() => void> = new Set()
-  private reconnectAttempts = 0
-  private reconnectTimer: NodeJS.Timeout | null = null
   private shouldReconnect = true
 
-  // Convert a socket.io-style URL to a native WebSocket URL
   static fromSocketIoUrl(socketIoUrl: string): WSClient {
-    let wsUrl: string
-    if (socketIoUrl.startsWith('/')) {
-      // Relative URL - use current origin
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      wsUrl = `${proto}//${window.location.host}/`
-    } else {
-      // Absolute URL - convert http(s) to ws(s)
-      wsUrl = socketIoUrl
-        .replace(/^http:/, 'ws:')
-        .replace(/^https:/, 'wss:')
-      // Remove the XTransformPort query (not needed for direct WS)
-      wsUrl = wsUrl.split('?')[0]
-      // Add trailing slash if missing
-      if (!wsUrl.endsWith('/')) wsUrl += '/'
-    }
-    return new WSClient(wsUrl)
+    // For socket.io, we use the URL as-is. socket.io-client will handle
+    // the protocol conversion automatically.
+    return new WSClient(socketIoUrl)
   }
 
   constructor(url: string) {
-    this.url = url
+    this.socketUrl = url
   }
 
   connect() {
     this.shouldReconnect = true
-    this.doConnect()
-  }
 
-  private doConnect() {
-    try {
-      this.ws = new WebSocket(this.url)
-    } catch (e) {
-      console.error('[WS] Failed to create WebSocket:', e)
-      this.scheduleReconnect()
-      return
+    // Determine the actual URL to connect to
+    let url: string
+    let options: any = {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
+      timeout: 10000,
     }
 
-    this.ws.onopen = () => {
-      console.log('[WS] Connected')
-      this.reconnectAttempts = 0
-      this.connectListeners.forEach((cb) => cb())
-    }
-
-    this.ws.onclose = () => {
-      console.log('[WS] Disconnected')
-      this.disconnectListeners.forEach((cb) => cb())
-      if (this.shouldReconnect) {
-        this.scheduleReconnect()
-      }
-    }
-
-    this.ws.onerror = (err) => {
-      console.error('[WS] Error:', err)
-    }
-
-    this.ws.onmessage = (event) => {
+    if (this.socketUrl.startsWith('/')) {
+      // Relative URL - use same origin (works in browser)
+      url = this.socketUrl
+    } else {
+      // Absolute URL - extract base URL and path
       try {
-        const message = JSON.parse(event.data)
-        const { event: evt, data } = message
-        if (evt) {
-          this.listeners.get(evt)?.forEach((cb) => cb(data))
+        const u = new URL(this.socketUrl)
+        url = `${u.protocol}//${u.host}`
+        const path = u.pathname.replace(/\/+$/, '')
+        if (path && path !== '/') {
+          options.path = path + '/'
         }
-      } catch (e) {
-        console.error('[WS] Failed to parse message:', e)
+      } catch {
+        url = this.socketUrl
       }
     }
-  }
 
-  private scheduleReconnect() {
-    if (this.reconnectTimer) return
-    const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 10000)
-    this.reconnectAttempts++
-    console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`)
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null
-      this.doConnect()
-    }, delay)
+    this.socket = io(url, options)
+
+    this.socket.on('connect', () => {
+      console.log('[Socket.io] Connected')
+      this.connectListeners.forEach((cb) => cb())
+    })
+
+    this.socket.on('disconnect', () => {
+      console.log('[Socket.io] Disconnected')
+      this.disconnectListeners.forEach((cb) => cb())
+    })
+
+    this.socket.on('connect_error', (err: any) => {
+      console.error('[Socket.io] Connection error:', err.message)
+    })
+
+    // Listen for all events and forward to listeners
+    this.socket.onAny((eventName: string, ...args: any[]) => {
+      const data = args[0]
+      this.listeners.get(eventName)?.forEach((cb) => cb(data))
+    })
   }
 
   on(event: string, handler: EventHandler) {
@@ -118,27 +103,23 @@ export class WSClient {
   }
 
   emit(event: string, data: any) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ event, data }))
+    if (this.socket) {
+      this.socket.emit(event, data)
       return true
     }
     return false
   }
 
   get connected() {
-    return this.ws?.readyState === WebSocket.OPEN
+    return this.socket?.connected || false
   }
 
   disconnect() {
     this.shouldReconnect = false
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
-    if (this.ws) {
-      this.ws.onclose = null
-      this.ws.close()
-      this.ws = null
+    if (this.socket) {
+      this.socket.removeAllListeners()
+      this.socket.disconnect()
+      this.socket = null
     }
   }
 }

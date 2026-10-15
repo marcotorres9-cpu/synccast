@@ -1,16 +1,46 @@
-// SyncCast WebSocket Service - Zero dependencies, native Node.js
-// Uses Node.js built-in http and a minimal Socket.io-compatible implementation
-// optimized for Render free tier
+// SyncCast WebSocket Service using Socket.io
+// Works through any reverse proxy (Render, Vercel, Cloudflare) via polling fallback
 
-const http = require('http')
-const crypto = require('crypto')
+const { createServer } = require('http')
+const { Server } = require('socket.io')
 
-// ============================================================
-// In-memory state
-// ============================================================
-const tvs = new Map()  // socketId -> { tvId, name, isOnline, volume, lastSeen }
-const controllers = new Map()  // socketId -> { name }
-const wsClients = new Map()  // socketId -> { ws, role, tvId }
+const httpServer = createServer((req, res) => {
+  // CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200)
+    res.end()
+    return
+  }
+
+  // Health check
+  if (req.url === '/' || req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ status: 'ok', service: 'synccast-sync', uptime: process.uptime() }))
+    return
+  }
+
+  res.writeHead(404)
+  res.end('Not found')
+})
+
+const io = new Server(httpServer, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  maxHttpBufferSize: 5 * 1024 * 1024,
+  // Allow both WebSocket and polling transports
+  transports: ['websocket', 'polling'],
+  // Allow upgrade from polling to websocket
+  allowUpgrades: true,
+})
+
+// State
+const tvs = new Map()
+const controllers = new Map()
 
 let playbackState = {
   mediaId: null,
@@ -36,29 +66,22 @@ function getTVsList() {
 }
 
 function broadcastTVsList() {
-  broadcastToRole('controllers', JSON.stringify({ event: 'tvs-list', data: { tvs: getTVsList() } }))
+  io.to('controllers').emit('tvs-list', { tvs: getTVsList() })
 }
 
 function broadcastPlaybackState() {
-  broadcastToRole('controllers', JSON.stringify({ event: 'playback-state', data: playbackState }))
+  io.to('controllers').emit('playback-state', playbackState)
 }
 
-function broadcastToRole(role, message) {
-  for (const [sid, client] of wsClients.entries()) {
-    if (client.role === role && client.ws.readyState === 1) {
-      client.ws.send(message)
-    }
-  }
+function sendToTVs(event, data) {
+  io.to('tvs').emit(event, data)
 }
 
-function sendToTVs(message) {
-  broadcastToRole('tv', message)
-}
-
-function sendToTV(tvId, message) {
-  for (const [sid, client] of wsClients.entries()) {
-    if (client.tvId === tvId && client.ws.readyState === 1) {
-      client.ws.send(message)
+function sendToTV(tvId, event, data) {
+  for (const [sid, tv] of tvs.entries()) {
+    if (tv.tvId === tvId) {
+      io.to(sid).emit(event, data)
+      break
     }
   }
 }
@@ -87,15 +110,13 @@ function handleCommand(socketId, action, payload) {
         playlistIndex: startIndex,
         playlist,
       }
-      sendToTVs(JSON.stringify({
-        event: 'load-media',
-        data: {
-          mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
-          mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
-          duration: playbackState.duration, playlist: playbackState.playlist,
-          playlistIndex: playbackState.playlistIndex,
-        },
-      }))
+      sendToTVs('load-media', {
+        mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
+        mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
+        youtubeId: playbackState.youtubeId,
+        duration: playbackState.duration, playlist: playbackState.playlist,
+        playlistIndex: playbackState.playlistIndex,
+      })
       broadcastPlaybackState()
       break
     }
@@ -105,10 +126,9 @@ function handleCommand(socketId, action, payload) {
       playbackState.position = fromPosition
       playbackState.targetPosition = fromPosition
       playbackState.targetPlayAt = now + buffer
-      sendToTVs(JSON.stringify({
-        event: 'sync-play',
-        data: { targetPlayAt: playbackState.targetPlayAt, position: fromPosition },
-      }))
+      sendToTVs('sync-play', {
+        targetPlayAt: playbackState.targetPlayAt, position: fromPosition,
+      })
       broadcastPlaybackState()
       break
     }
@@ -119,7 +139,7 @@ function handleCommand(socketId, action, payload) {
         playbackState.position = payload.position
         playbackState.targetPosition = payload.position
       }
-      sendToTVs(JSON.stringify({ event: 'sync-pause', data: { position: playbackState.position } }))
+      sendToTVs('sync-pause', { position: playbackState.position })
       broadcastPlaybackState()
       break
     }
@@ -129,15 +149,13 @@ function handleCommand(socketId, action, payload) {
       playbackState.targetPosition = newPosition
       if (playbackState.isPlaying) {
         playbackState.targetPlayAt = now + buffer
-        sendToTVs(JSON.stringify({
-          event: 'sync-seek',
-          data: { position: newPosition, isPlaying: true, targetPlayAt: playbackState.targetPlayAt },
-        }))
+        sendToTVs('sync-seek', {
+          position: newPosition, isPlaying: true, targetPlayAt: playbackState.targetPlayAt,
+        })
       } else {
-        sendToTVs(JSON.stringify({
-          event: 'sync-seek',
-          data: { position: newPosition, isPlaying: false, targetPlayAt: null },
-        }))
+        sendToTVs('sync-seek', {
+          position: newPosition, isPlaying: false, targetPlayAt: null,
+        })
       }
       broadcastPlaybackState()
       break
@@ -157,26 +175,22 @@ function handleCommand(socketId, action, payload) {
         playbackState.targetPosition = 0
         if (playbackState.isPlaying) {
           playbackState.targetPlayAt = now + buffer
-          sendToTVs(JSON.stringify({
-            event: 'load-media',
-            data: {
-              mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
-              mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
-              duration: playbackState.duration, playlist: playbackState.playlist,
-              playlistIndex: playbackState.playlistIndex,
-              autoPlay: true, targetPlayAt: playbackState.targetPlayAt,
-            },
-          }))
+          sendToTVs('load-media', {
+            mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
+            mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
+            youtubeId: playbackState.youtubeId,
+            duration: playbackState.duration, playlist: playbackState.playlist,
+            playlistIndex: playbackState.playlistIndex,
+            autoPlay: true, targetPlayAt: playbackState.targetPlayAt,
+          })
         } else {
-          sendToTVs(JSON.stringify({
-            event: 'load-media',
-            data: {
-              mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
-              mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
-              duration: playbackState.duration, playlist: playbackState.playlist,
-              playlistIndex: playbackState.playlistIndex,
-            },
-          }))
+          sendToTVs('load-media', {
+            mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
+            mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
+            youtubeId: playbackState.youtubeId,
+            duration: playbackState.duration, playlist: playbackState.playlist,
+            playlistIndex: playbackState.playlistIndex,
+          })
         }
         broadcastPlaybackState()
       }
@@ -195,15 +209,13 @@ function handleCommand(socketId, action, payload) {
         playbackState.duration = item.duration
         playbackState.position = 0
         playbackState.targetPosition = 0
-        sendToTVs(JSON.stringify({
-          event: 'load-media',
-          data: {
-            mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
-            mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
-            duration: playbackState.duration, playlist: playbackState.playlist,
-            playlistIndex: playbackState.playlistIndex,
-          },
-        }))
+        sendToTVs('load-media', {
+          mediaId: playbackState.mediaId, mediaType: playbackState.mediaType,
+          mediaName: playbackState.mediaName, mediaUrl: playbackState.mediaUrl,
+          youtubeId: playbackState.youtubeId,
+          duration: playbackState.duration, playlist: playbackState.playlist,
+          playlistIndex: playbackState.playlistIndex,
+        })
         broadcastPlaybackState()
       }
       break
@@ -213,7 +225,7 @@ function handleCommand(socketId, action, payload) {
       playbackState.position = 0
       playbackState.targetPosition = 0
       playbackState.targetPlayAt = null
-      sendToTVs(JSON.stringify({ event: 'sync-stop' }))
+      sendToTVs('sync-stop')
       broadcastPlaybackState()
       break
     }
@@ -222,13 +234,13 @@ function handleCommand(socketId, action, payload) {
         for (const tv of tvs.values()) {
           if (tv.tvId === payload.tvId) {
             tv.volume = payload.volume
-            sendToTV(payload.tvId, JSON.stringify({ event: 'set-volume', data: { volume: payload.volume } }))
+            sendToTV(payload.tvId, 'set-volume', { volume: payload.volume })
             break
           }
         }
       } else {
         for (const tv of tvs.values()) tv.volume = payload.volume
-        sendToTVs(JSON.stringify({ event: 'set-volume', data: { volume: payload.volume } }))
+        sendToTVs('set-volume', { volume: payload.volume })
       }
       broadcastTVsList()
       break
@@ -243,7 +255,7 @@ function handleCommand(socketId, action, payload) {
     }
     case 'kick-tv': {
       const { tvId } = payload
-      sendToTV(tvId, JSON.stringify({ event: 'force-disconnect' }))
+      sendToTV(tvId, 'force-disconnect')
       for (const [sid, tv] of tvs.entries()) {
         if (tv.tvId === tvId) { tvs.delete(sid); break }
       }
@@ -253,236 +265,95 @@ function handleCommand(socketId, action, payload) {
   }
 }
 
-// ============================================================
-// HTTP server (handles health checks + WebSocket upgrade)
-// ============================================================
-const server = http.createServer((req, res) => {
-  // CORS headers for all responses
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+io.on('connection', (socket) => {
+  console.log(`[CONNECT] ${socket.id}`)
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(200)
-    res.end()
-    return
-  }
+  socket.on('sync-ping', (data) => {
+    const t2 = Date.now()
+    socket.emit('sync-pong', { t1: data.t1, t2, t3: Date.now() })
+  })
 
-  // Health check endpoint for Render
-  if (req.url === '/' || req.url === '/health' || req.url === '/healthz') {
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ status: 'ok', service: 'synccast-sync', uptime: process.uptime() }))
-    return
-  }
+  socket.on('register-tv', (data) => {
+    socket.join('tvs')
+    socket.data.role = 'tv'
+    socket.data.tvId = data.tvId
 
-  // Socket.io polling endpoint (for clients that don't support WebSocket)
-  if (req.url && req.url.startsWith('/socket.io/')) {
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ sid: crypto.randomBytes(16).toString('hex'), upgrades: ['websocket'] }))
-    return
-  }
+    const tv = {
+      socketId: socket.id, tvId: data.tvId, name: data.name,
+      isOnline: true, volume: 80, lastSeen: Date.now(),
+    }
+    tvs.set(socket.id, tv)
 
-  res.writeHead(404)
-  res.end('Not found')
-})
+    console.log(`[TV REGISTERED] ${data.name} (${data.tvId})`)
+    broadcastTVsList()
+    socket.emit('playback-state', playbackState)
+  })
 
-// ============================================================
-// Native WebSocket handling (RFC 6455 implementation)
-// ============================================================
-server.on('upgrade', (req, socket, head) => {
-  // Accept WebSocket upgrade
-  const key = req.headers['sec-websocket-key']
-  if (!key) {
-    socket.destroy()
-    return
-  }
+  socket.on('register-controller', (data) => {
+    socket.join('controllers')
+    socket.data.role = 'controller'
+    controllers.set(socket.id, { socketId: socket.id, name: data.name || 'Controller' })
+    console.log(`[CONTROLLER REGISTERED] ${data.name}`)
+    socket.emit('tvs-list', { tvs: getTVsList() })
+    socket.emit('playback-state', playbackState)
+  })
 
-  const accept = crypto
-    .createHash('sha1')
-    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
-    .digest('base64')
+  socket.on('command', (data) => {
+    if (socket.data.role !== 'controller') return
+    handleCommand(socket.id, data.action, data.payload)
+  })
 
-  socket.write(
-    'HTTP/1.1 101 Switching Protocols\r\n' +
-    'Upgrade: websocket\r\n' +
-    'Connection: Upgrade\r\n' +
-    'Sec-WebSocket-Accept: ' + accept + '\r\n' +
-    '\r\n'
-  )
+  socket.on('tv-progress', (data) => {
+    if (socket.data.role !== 'tv') return
+    const tv = tvs.get(socket.id)
+    if (tv) tv.lastSeen = Date.now()
+    if (data.isPlaying) playbackState.position = data.position
+  })
 
-  const socketId = crypto.randomBytes(16).toString('hex')
-  const client = { ws: socket, role: null, tvId: null, buffer: Buffer.alloc(0) }
-  wsClients.set(socketId, client)
+  socket.on('tv-media-ended', (data) => {
+    if (socket.data.role !== 'tv') return
+    io.to('controllers').emit('media-ended', { mediaId: data.mediaId, from: socket.id })
+  })
 
-  console.log(`[WS CONNECT] ${socketId}`)
+  socket.on('tv-duration', (data) => {
+    if (socket.data.role !== 'tv') return
+    if (data.duration && data.duration > 0) {
+      playbackState.duration = data.duration
+      broadcastPlaybackState()
+    }
+  })
 
-  socket.on('data', (chunk) => {
-    try {
-      client.buffer = Buffer.concat([client.buffer, chunk])
-      while (client.buffer.length >= 2) {
-        const frame = parseFrame(client.buffer)
-        if (!frame) break
-        client.buffer = client.buffer.slice(frame.totalLength)
-        if (frame.opcode === 0x8) {  // Close
-          socket.end()
-          return
-        }
-        if (frame.opcode === 0x9) {  // Ping
-          sendFrame(socket, frame.payload, 0xA)
-          continue
-        }
-        if (frame.opcode === 0x1 && frame.payload) {  // Text
-          handleMessage(socketId, frame.payload.toString())
-        }
+  socket.on('disconnect', () => {
+    if (socket.data.role === 'tv') {
+      const tv = tvs.get(socket.id)
+      if (tv) {
+        tvs.delete(socket.id)
+        console.log(`[TV DISCONNECTED] ${tv.name}`)
       }
-    } catch (e) {
-      console.error('[WS ERROR]', e.message)
-    }
-  })
-
-  socket.on('close', () => {
-    const client = wsClients.get(socketId)
-    if (client) {
-      if (client.role === 'tv') {
-        const tv = tvs.get(socketId)
-        if (tv) {
-          tvs.delete(socketId)
-          console.log(`[TV DISCONNECTED] ${tv.name}`)
-        }
-        broadcastTVsList()
-      } else if (client.role === 'controller') {
-        controllers.delete(socketId)
-        console.log('[CONTROLLER DISCONNECTED]')
-      }
-      wsClients.delete(socketId)
-    }
-  })
-
-  socket.on('error', (err) => {
-    console.error(`[SOCKET ERROR] ${socketId}:`, err.message)
-  })
-})
-
-function parseFrame(buffer) {
-  if (buffer.length < 2) return null
-  const opcode = buffer[0] & 0x0F
-  let payloadLen = buffer[1] & 0x7F
-  let offset = 2
-  if (payloadLen === 126) {
-    if (buffer.length < 4) return null
-    payloadLen = buffer.readUInt16BE(2)
-    offset = 4
-  } else if (payloadLen === 127) {
-    if (buffer.length < 10) return null
-    payloadLen = Number(buffer.readBigUInt64BE(2))
-    offset = 10
-  }
-  if (buffer.length < offset + payloadLen) return null
-  const payload = buffer.slice(offset, offset + payloadLen)
-  return { opcode, payload, totalLength: offset + payloadLen }
-}
-
-function sendFrame(socket, data, opcode = 0x1) {
-  const payload = Buffer.isBuffer(data) ? data : Buffer.from(data)
-  const len = payload.length
-  let header
-  if (len < 126) {
-    header = Buffer.alloc(2)
-    header[1] = len
-  } else if (len < 65536) {
-    header = Buffer.alloc(4)
-    header[1] = 126
-    header.writeUInt16BE(len, 2)
-  } else {
-    header = Buffer.alloc(10)
-    header[1] = 127
-    header.writeBigUInt64BE(BigInt(len), 2)
-  }
-  header[0] = 0x80 | opcode  // FIN bit + opcode
-  socket.write(Buffer.concat([header, payload]))
-}
-
-function handleMessage(socketId, message) {
-  let parsed
-  try {
-    parsed = JSON.parse(message)
-  } catch {
-    return
-  }
-
-  const { event, data } = parsed
-  const client = wsClients.get(socketId)
-  if (!client) return
-
-  switch (event) {
-    case 'sync-ping': {
-      const t2 = Date.now()
-      sendFrame(client.ws, JSON.stringify({ event: 'sync-pong', data: { t1: data.t1, t2, t3: Date.now() } }))
-      break
-    }
-    case 'register-tv': {
-      client.role = 'tv'
-      client.tvId = data.tvId
-      tvs.set(socketId, {
-        socketId: socketId, tvId: data.tvId, name: data.name,
-        isOnline: true, volume: 80, lastSeen: Date.now(),
-      })
-      console.log(`[TV REGISTERED] ${data.name} (${data.tvId})`)
       broadcastTVsList()
-      sendFrame(client.ws, JSON.stringify({ event: 'playback-state', data: playbackState }))
-      break
+    } else if (socket.data.role === 'controller') {
+      controllers.delete(socket.id)
+      console.log('[CONTROLLER DISCONNECTED]')
     }
-    case 'register-controller': {
-      client.role = 'controller'
-      controllers.set(socketId, { socketId: socketId, name: data.name || 'Controller' })
-      console.log(`[CONTROLLER REGISTERED] ${data.name}`)
-      sendFrame(client.ws, JSON.stringify({ event: 'tvs-list', data: { tvs: getTVsList() } }))
-      sendFrame(client.ws, JSON.stringify({ event: 'playback-state', data: playbackState }))
-      break
-    }
-    case 'command': {
-      if (client.role !== 'controller') return
-      handleCommand(socketId, data.action, data.payload)
-      break
-    }
-    case 'tv-progress': {
-      if (client.role !== 'tv') return
-      const tv = tvs.get(socketId)
-      if (tv) tv.lastSeen = Date.now()
-      if (data.isPlaying) playbackState.position = data.position
-      break
-    }
-    case 'tv-media-ended': {
-      if (client.role !== 'tv') return
-      broadcastToRole('controllers', JSON.stringify({ event: 'media-ended', data: { mediaId: data.mediaId } }))
-      break
-    }
-    case 'tv-duration': {
-      if (client.role !== 'tv') return
-      if (data.duration && data.duration > 0) {
-        playbackState.duration = data.duration
-        broadcastPlaybackState()
-      }
-      break
-    }
-  }
-}
+  })
 
-// ============================================================
-// Start server
-// ============================================================
+  socket.on('error', (error) => {
+    console.error(`[SOCKET ERROR] ${socket.id}:`, error)
+  })
+})
+
 const PORT = parseInt(process.env.PORT || '3003', 10)
-server.listen(PORT, () => {
-  console.log(`[SYNC-SERVICE] Server running on port ${PORT}`)
-  console.log(`[SYNC-SERVICE] Health check: http://localhost:${PORT}/`)
+httpServer.listen(PORT, () => {
+  console.log(`[SYNC-SERVICE] Socket.io server running on port ${PORT}`)
+  console.log(`[SYNC-SERVICE] Transports: websocket, polling`)
 })
 
 process.on('SIGTERM', () => {
   console.log('[SYNC-SERVICE] SIGTERM received, shutting down...')
-  server.close(() => process.exit(0))
+  httpServer.close(() => process.exit(0))
 })
 
 process.on('SIGINT', () => {
   console.log('[SYNC-SERVICE] SIGINT received, shutting down...')
-  server.close(() => process.exit(0))
+  httpServer.close(() => process.exit(0))
 })

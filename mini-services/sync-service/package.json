@@ -5,5 +5,7 @@
     "dev": "node index.js",
     "start": "node index.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "socket.io": "^4.8.4"
+  }
 }
