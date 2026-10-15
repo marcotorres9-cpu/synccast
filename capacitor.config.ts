@@ -6,12 +6,10 @@ const config: CapacitorConfig = {
   webDir: 'out',
   server: {
     androidScheme: 'https',
-    // Allow cleartext for HTTP uploads on local network
     cleartext: true,
   },
   android: {
     allowMixedContent: true,
-    // Required for accessing local network IPs
     captureInput: true,
     webContentsDebuggingEnabled: true,
   },

@@ -12,8 +12,8 @@ import {
 } from 'lucide-react'
 
 export default function DownloadPage() {
-  const [apkSize, setApkSize] = useState<string>('7.5 MB')
-  const [version] = useState('1.1.0')
+  const [apkSize, setApkSize] = useState<string>('4.2 MB')
+  const [version] = useState('1.1.6')
   const [releaseDate] = useState('15 Octubre 2026')
   const [downloading, setDownloading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState(0)
@@ -21,7 +21,7 @@ export default function DownloadPage() {
 
   useEffect(() => {
     // Fetch APK size from HEAD request
-    fetch('/downloads/SyncCast-v1.1.0.apk', { method: 'HEAD' })
+    fetch('/downloads/SyncCast-v1.1.6.apk', { method: 'HEAD' })
       .then((res) => {
         const size = parseInt(res.headers.get('content-length') || '0', 10)
         if (size > 0) {
@@ -36,7 +36,7 @@ export default function DownloadPage() {
     setDownloading(true)
     setDownloadProgress(0)
     try {
-      const res = await fetch('/downloads/SyncCast-v1.1.0.apk')
+      const res = await fetch('/downloads/SyncCast-v1.1.6.apk')
       const contentLength = res.headers.get('content-length')
       const total = contentLength ? parseInt(contentLength, 10) : 0
       const reader = res.body?.getReader()
@@ -65,7 +65,7 @@ export default function DownloadPage() {
       URL.revokeObjectURL(url)
     } catch (e) {
       // Fallback: direct link
-      window.location.href = '/downloads/SyncCast-v1.1.0.apk'
+      window.location.href = '/downloads/SyncCast-v1.1.6.apk'
     } finally {
       setTimeout(() => {
         setDownloading(false)
