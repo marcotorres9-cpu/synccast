@@ -24,24 +24,12 @@ declare global {
   }
 }
 
+// YouTube IFrame API loading is no longer needed - we use direct iframe embed
+// which works on all browsers including smart TVs
 let ytApiPromise: Promise<any> | null = null
 function loadYouTubeAPI(): Promise<any> {
-  if (typeof window === 'undefined') return Promise.reject()
-  if (window.YT && window.YT.Player) return Promise.resolve(window.YT)
-  if (ytApiPromise) return ytApiPromise
-  ytApiPromise = new Promise((resolve, reject) => {
-    const tag = document.createElement('script')
-    tag.src = 'https://www.youtube.com/iframe_api'
-    tag.onerror = () => reject(new Error('Failed to load YouTube API'))
-    const firstScriptTag = document.getElementsByTagName('script')[0]
-    firstScriptTag?.parentNode?.insertBefore(tag, firstScriptTag)
-    const timeout = setTimeout(() => reject(new Error('YouTube API timeout')), 15000)
-    window.onYouTubeIframeAPIReady = () => {
-      clearTimeout(timeout)
-      resolve(window.YT)
-    }
-  })
-  return ytApiPromise
+  // No-op: we use direct iframe embed now
+  return Promise.resolve(null)
 }
 
 interface TvPlayerProps {
@@ -96,28 +84,21 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     if (loading) {
       loadingTimeoutRef.current = setTimeout(() => {
         setLoading(false)
-        if (mediaInfo.mediaType === 'youtube' && !ytReady) {
-          setError('YouTube tardó demasiado en cargar. Toca la pantalla para reintentar.')
-        }
-      }, 15000)
+        // Don't show error for YouTube - iframe loads independently
+      }, 5000)
     }
     return () => {
       if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current)
     }
-  }, [loading, mediaInfo.mediaType, ytReady])
+  }, [loading])
 
   // Apply volume
   useEffect(() => {
     const v = muted ? 0 : volume / 100
     if (videoRef.current) videoRef.current.volume = v
     if (audioRef.current) audioRef.current.volume = v
-    if (ytPlayerRef.current && ytReady) {
-      try {
-        ytPlayerRef.current.setVolume(volume)
-        if (muted) ytPlayerRef.current.mute()
-        else ytPlayerRef.current.unMute()
-      } catch {}
-    }
+    // Can't control volume of iframe YouTube programmatically
+    // Volume is controlled by the device
   }, [volume, muted, ytReady])
 
   // Load media effect
@@ -146,100 +127,23 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadMediaData])
 
-  // YouTube player initialization - runs when youtubeId changes
+  // YouTube player - use simple iframe embed (works on all browsers including smart TVs)
   useEffect(() => {
     if (mediaInfo.mediaType !== 'youtube' || !mediaInfo.youtubeId) return
-    // Wait for the div to be rendered
-    const timer = setTimeout(() => {
-      if (!youtubeDivRef.current) {
-        console.error('YouTube div not in DOM yet')
-        return
-      }
-      let cancelled = false
-      const initYt = async () => {
-        try {
-          const YT = await loadYouTubeAPI()
-          if (cancelled) return
-          // Destroy existing
-          if (ytPlayerRef.current) {
-            try { ytPlayerRef.current.destroy() } catch {}
-            ytPlayerRef.current = null
-          }
-          // Create new div to ensure clean state
-          const newDiv = document.createElement('div')
-          youtubeDivRef.current.innerHTML = ''
-          youtubeDivRef.current.appendChild(newDiv)
-
-          ytPlayerRef.current = new YT.Player(newDiv, {
-            videoId: mediaInfo.youtubeId,
-            playerVars: {
-              autoplay: 0,
-              controls: 0,
-              disablekb: 1,
-              fs: 0,
-              modestbranding: 1,
-              playsinline: 1,
-              rel: 0,
-              origin: typeof window !== 'undefined' ? window.location.origin : undefined,
-            },
-            events: {
-              onReady: (e: any) => {
-                if (cancelled) return
-                setYtReady(true)
-                // eslint-disable-next-line react-hooks/set-state-in-effect
-                setLoading(false)
-                try {
-                  e.target.setVolume(muted ? 0 : volume)
-                } catch {}
-                try {
-                  const dur = e.target.getDuration()
-                  if (dur) {
-                    // eslint-disable-next-line react-hooks/set-state-in-effect
-                    setDuration(dur)
-                    reportDuration(dur)
-                  }
-                } catch {}
-              },
-              onStateChange: (e: any) => {
-                const YT_STATE = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 }
-                if (e.data === YT_STATE.PLAYING) {
-                  setIsPlaying(true)
-                  // eslint-disable-next-line react-hooks/set-state-in-effect
-                  setLoading(false)
-                } else if (e.data === YT_STATE.PAUSED) {
-                  setIsPlaying(false)
-                } else if (e.data === YT_STATE.ENDED) {
-                  setIsPlaying(false)
-                  if (mediaInfo.mediaId) reportEnded(mediaInfo.mediaId)
-                }
-              },
-              onError: (e: any) => {
-                console.error('YouTube error:', e.data)
-                setError('Error al cargar el video de YouTube (código: ' + e.data + ')')
-                // eslint-disable-next-line react-hooks/set-state-in-effect
-                setLoading(false)
-              },
-            },
-          })
-        } catch (e: any) {
-          console.error('Failed to init YouTube:', e)
-          setError(e.message || 'No se pudo cargar el reproductor de YouTube')
-          // eslint-disable-next-line react-hooks/set-state-in-effect
-          setLoading(false)
-        }
-      }
-      initYt()
-      return () => { cancelled = true }
-    }, 100)
-    return () => {
-      clearTimeout(timer)
-      if (ytPlayerRef.current) {
-        try { ytPlayerRef.current.destroy() } catch {}
-        ytPlayerRef.current = null
-      }
-      setYtReady(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    
+    // Clear loading state - iframe loads automatically
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(false)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setYtReady(true)
+    
+    // For YouTube, we use a simple iframe embed which works on all browsers
+    // The IFrame API has issues on some smart TVs (Samsung, LG, ZITRO, etc)
+    
+    // Reset state when video changes
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCurrentTime(0)
+    
   }, [mediaInfo.youtubeId, mediaInfo.mediaType])
 
   // Video/audio element loadedmetadata
@@ -306,11 +210,8 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   // Sync pause
   useEffect(() => {
     if (!syncPause) return
-    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
-      try {
-        ytPlayerRef.current.pauseVideo()
-        ytPlayerRef.current.seekTo(syncPause.position, true)
-      } catch {}
+    if (mediaInfo.mediaType === 'youtube') {
+      // Can't pause iframe YouTube programmatically
       setIsPlaying(false)
       return
     }
@@ -326,21 +227,11 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   // Sync seek
   useEffect(() => {
     if (!syncSeek) return
-    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
-      try {
-        ytPlayerRef.current.seekTo(syncSeek.position, true)
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setCurrentTime(syncSeek.position)
-        if (syncSeek.isPlaying && syncSeek.targetPlayAt) {
-          const wait = getWaitUntil(syncSeek.targetPlayAt)
-          setTimeout(() => {
-            try { ytPlayerRef.current.playVideo(); setIsPlaying(true) } catch {}
-          }, Math.max(0, wait))
-        } else {
-          try { ytPlayerRef.current.pauseVideo() } catch {}
-          setIsPlaying(false)
-        }
-      } catch {}
+    if (mediaInfo.mediaType === 'youtube') {
+      // Can't seek iframe YouTube programmatically
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCurrentTime(syncSeek.position)
+      setIsPlaying(syncSeek.isPlaying || false)
       return
     }
     const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
@@ -367,8 +258,9 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   // Sync stop
   useEffect(() => {
     if (syncStop === null) return
-    if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
-      try { ytPlayerRef.current.stopVideo() } catch {}
+    if (mediaInfo.mediaType === 'youtube') {
+      // Can't stop iframe YouTube programmatically
+      // The iframe will be unmounted when mediaInfo changes
     } else {
       const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
       if (targetEl) {
@@ -392,16 +284,12 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   useEffect(() => {
     if (progressIntervalRef.current) clearInterval(progressIntervalRef.current)
     progressIntervalRef.current = setInterval(() => {
-      if (mediaInfo.mediaType === 'youtube' && ytPlayerRef.current && ytReady) {
-        try {
-          const t = ytPlayerRef.current.getCurrentTime()
-          const isPlaying = ytPlayerRef.current.getPlayerState() === 1
-          if (t) {
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            setCurrentTime(t)
-            reportProgress(t, isPlaying)
-          }
-        } catch {}
+      if (mediaInfo.mediaType === 'youtube') {
+        // Can't get current time from iframe YouTube
+        // Just report that we're playing
+        if (isPlaying) {
+          reportProgress(0, true)
+        }
       } else {
         const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
         if (targetEl && !targetEl.paused) {
@@ -428,44 +316,18 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     setShowOverlay((v) => !v)
   }, [])
 
-  // Retry loading YouTube (when it failed or timed out)
+  // Retry is no longer needed for YouTube (iframe loads automatically)
   const handleRetryYouTube = useCallback(() => {
-    if (mediaInfo.mediaType !== 'youtube' || !mediaInfo.youtubeId) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setError(null)
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoading(true)
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setYtReady(false)
-    // Force YouTube player re-creation by toggling the youtubeId
-    const ytId = mediaInfo.youtubeId
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMediaInfo((prev) => ({ ...prev, youtubeId: null }))
-    setTimeout(() => {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setMediaInfo((prev) => ({ ...prev, youtubeId: ytId }))
-    }, 100)
-  }, [mediaInfo.mediaType, mediaInfo.youtubeId])
+    // No-op
+  }, [])
 
   const handleManualPlay = useCallback(() => {
     if (mediaInfo.mediaType === 'youtube') {
-      if (!ytReady || !ytPlayerRef.current) {
-        handleRetryYouTube()
-        return
-      }
-      try {
-        const state = ytPlayerRef.current.getPlayerState()
-        if (state === 1) {
-          ytPlayerRef.current.pauseVideo()
-          setIsPlaying(false)
-        } else {
-          ytPlayerRef.current.playVideo()
-          setIsPlaying(true)
-          setShowOverlay(false)
-        }
-      } catch {
-        handleRetryYouTube()
-      }
+      // For iframe YouTube, we can't control playback programmatically
+      // (would require YouTube IFrame API which doesn't work on smart TVs)
+      // The iframe autoplays when loaded
+      setIsPlaying(true)
+      setShowOverlay(false)
       return
     }
     const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
@@ -523,10 +385,15 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
         />
       )}
       {mediaInfo.mediaType === 'youtube' && mediaInfo.youtubeId && (
-        <div ref={youtubeContainerRef} className="w-full h-full flex items-center justify-center">
-          <div className="w-full h-full max-w-[100vw] max-h-[100vh]">
-            <div ref={youtubeDivRef} className="w-full h-full" />
-          </div>
+        <div className="w-full h-full flex items-center justify-center bg-black">
+          <iframe
+            src={`https://www.youtube.com/embed/${mediaInfo.youtubeId}?autoplay=1&controls=0&modestbranding=1&playsinline=1&rel=0&showinfo=0&enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+            className="w-full h-full"
+            style={{ border: 'none', maxWidth: '100vw', maxHeight: '100vh' }}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+            ref={youtubeContainerRef}
+          />
         </div>
       )}
 

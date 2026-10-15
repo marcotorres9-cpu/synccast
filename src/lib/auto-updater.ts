@@ -10,7 +10,7 @@
  */
 
 const GITHUB_RELEASES_URL = 'https://api.github.com/repos/marcotorres9-cpu/synccast/releases/latest'
-const CURRENT_VERSION = '1.2.2' // Must match package.json / build.gradle
+const CURRENT_VERSION = '1.2.3' // Must match package.json / build.gradle
 
 export interface UpdateInfo {
   version: string
