@@ -3,15 +3,17 @@ import { CapacitorConfig } from '@capacitor/cli'
 const config: CapacitorConfig = {
   appId: 'com.synccast.app',
   appName: 'SyncCast',
-  webDir: 'out',
+  // NO webDir needed - we load from server URL
   server: {
-    androidScheme: 'https',
+    // Always load from the live Vercel URL
+    // This means web updates are INSTANT - no need to rebuild APK
+    url: 'https://synccast-repo.vercel.app',
     cleartext: true,
   },
   android: {
     allowMixedContent: true,
     captureInput: true,
-    webContentsDebuggingEnabled: true,
+    webContentsDebuggingEnabled: false,
   },
   plugins: {
     SplashScreen: {

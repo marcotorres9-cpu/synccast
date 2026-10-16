@@ -57,7 +57,6 @@ export default function RootLayout({
       >
         {children}
         <Toaster />
-        <UpdateNotification />
       </body>
     </html>
   );
