@@ -4,9 +4,9 @@ export const runtime = 'edge'
 
 export async function GET() {
   return NextResponse.json({
-    version: '2.0.0',
+    version: '2.1.0',
     deployedAt: '2026-10-15',
-    changelog: 'Sistema de actualizaciones internas + Cloudinary',
+    changelog: 'Cloudinary upload + live URL loading',
   }, {
     headers: {
       'Access-Control-Allow-Origin': '*',
