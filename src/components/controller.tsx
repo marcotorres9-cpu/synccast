@@ -55,8 +55,15 @@ export function Controller() {
   // --------------------------------------------------------
   const fetchMedia = useCallback(async () => {
     try {
-      const res = await fetch(apiUrl('/api/media'))
+      let res
+      try {
+        res = await fetch(apiUrl('/api/media'))
+      } catch (fetchErr) {
+        console.error('Fetch error, trying direct URL:', fetchErr)
+        res = await fetch('https://synccast-repo.vercel.app/api/media')
+      }
       const data = await res.json()
+      console.log('Media fetched:', data.files?.length || 0, 'files')
       if (data.files) setMediaFiles(data.files)
     } catch (e) {
       console.error('Failed to fetch media:', e)
@@ -145,20 +152,38 @@ export function Controller() {
           xhr.send(formData)
         })
 
-        // Save to our database
+        // Save to our database - with fallback URLs
         console.log('Upload complete, saving to DB...', result.secure_url)
-        const saveRes = await fetch(apiUrl('/api/save-media'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: file.name,
-            url: result.secure_url,
-            publicId: result.public_id,
-            size: result.bytes,
-            duration: result.duration || null,
-            type: type,
-          }),
-        })
+        let saveRes
+        try {
+          saveRes = await fetch(apiUrl('/api/save-media'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: file.name,
+              url: result.secure_url,
+              publicId: result.public_id,
+              size: result.bytes,
+              duration: result.duration || null,
+              type: type,
+            }),
+          })
+        } catch (fetchErr) {
+          console.error('Fetch error, trying direct URL:', fetchErr)
+          // Fallback: try direct Vercel URL
+          saveRes = await fetch('https://synccast-repo.vercel.app/api/save-media', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: file.name,
+              url: result.secure_url,
+              publicId: result.public_id,
+              size: result.bytes,
+              duration: result.duration || null,
+              type: type,
+            }),
+          })
+        }
         console.log('Save response status:', saveRes.status)
         const saveData = await saveRes.json()
         console.log('Save response data:', saveData)
@@ -166,7 +191,7 @@ export function Controller() {
         if (saveData.file) {
           toast.success(`"${file.name}" subido correctamente`)
         } else {
-          toast.error('Error: no se pudo guardar en la base de datos')
+          toast.error('Error guardando: ' + (saveData.error || 'desconocido'))
           console.error('Save failed:', saveData)
         }
       } catch (e: any) {
