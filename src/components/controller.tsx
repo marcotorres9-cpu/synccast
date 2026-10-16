@@ -95,12 +95,25 @@ export function Controller() {
         method: 'POST',
         body: formData,
       })
+      if (!res.ok) {
+        const errorText = await res.text()
+        console.error('Upload error response:', errorText)
+        let errorMsg = 'Error al subir archivos'
+        try {
+          const errorJson = JSON.parse(errorText)
+          errorMsg = errorJson.error || errorMsg
+        } catch {
+          errorMsg = errorText.substring(0, 200) || errorMsg
+        }
+        toast.error(`Error: ${errorMsg}`)
+        return
+      }
       const data = await res.json()
-      if (data.files) {
+      if (data.files && data.files.length > 0) {
         toast.success(`${data.files.length} archivo(s) subido(s) correctamente`)
         await fetchMedia()
       } else {
-        toast.error('Error al subir archivos')
+        toast.error('Error: respuesta vacía del servidor')
       }
     } catch (e: any) {
       toast.error('Error: ' + e.message)
