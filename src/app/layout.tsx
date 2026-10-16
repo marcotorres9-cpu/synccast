@@ -57,7 +57,7 @@ export default function RootLayout({
       >
         {children}
         <Toaster />
-        <UpdateManager />
+        <UpdateManagerClient />
       </body>
     </html>
   );
