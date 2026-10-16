@@ -13,6 +13,13 @@ export function UpdateNotification() {
   const [downloadProgress, setDownloadProgress] = useState(0)
 
   useEffect(() => {
+    // Don't show update notification in TV mode
+    // (TVs should not see update prompts - only the controller phone should)
+    if (typeof window !== 'undefined') {
+      const tvMode = localStorage.getItem('synccast-tv')
+      if (tvMode) return // This is a TV, don't show update notification
+    }
+
     // If user dismissed, don't show again
     if (isUpdateDismissed()) return
 
@@ -86,6 +93,9 @@ export function UpdateNotification() {
     setDismissed(true)
     dismissUpdate()
   }
+
+  // Don't render anything in TV mode
+  if (typeof window !== 'undefined' && localStorage.getItem('synccast-tv')) return null
 
   if (!update || dismissed) return null
 
