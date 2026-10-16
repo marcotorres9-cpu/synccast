@@ -662,18 +662,34 @@ export function Controller() {
             </Card>
           </TabsContent>
 
-          {/* YOUTUBE TAB */}
+          {/* YOUTUBE TAB - Manual MP4 approach */}
           <TabsContent value="youtube" className="space-y-4 mt-4">
-            <Card className="glass-card p-4">
-              <div className="flex items-center justify-between mb-3">
-                <Label className="text-base font-semibold text-white flex items-center gap-2">
-                  <Youtube className="w-4 h-4 text-red-500" />
-                  Agregar Video de YouTube
-                </Label>
+            <Card className="glass-card p-4 border-amber-500/20 bg-amber-500/5">
+              <div className="flex items-start gap-3 mb-3">
+                <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-amber-300 mb-1">Cómo reproducir YouTube en 4K</p>
+                  <p className="text-xs text-white/70">
+                    YouTube bloquea la descarga automática. Para reproducir en 4K en tus TVs:
+                  </p>
+                </div>
               </div>
+              <ol className="text-xs text-white/60 space-y-2 ml-8 list-decimal">
+                <li>Descarga el video con <strong className="text-white">TubeMate</strong> o <strong className="text-white">1DM</strong> (apps gratis en Android)</li>
+                <li>Selecciona calidad <strong className="text-white">4K (2160p)</strong> al descargar</li>
+                <li>Vuelve aquí y sube el archivo MP4 en la pestaña <strong className="text-white">Videos</strong></li>
+                <li>¡Reproduce en tus 10 TVs con sincronización perfecta!</li>
+              </ol>
+            </Card>
+
+            <Card className="glass-card p-4">
+              <Label className="text-base font-semibold text-white flex items-center gap-2 mb-3">
+                <LinkIcon className="w-4 h-4 text-primary" />
+                Agregar por URL (Google Drive, Dropbox, etc.)
+              </Label>
               <div className="space-y-3">
                 <Input
-                  placeholder="Pega aquí la URL de YouTube (ej: https://youtu.be/dQw4w9WgXcQ)"
+                  placeholder="https://drive.google.com/... o URL directa .mp4"
                   className="glass border-white/10"
                   value={youtubeUrlInput}
                   onChange={(e) => setYoutubeUrlInput(e.target.value)}
@@ -682,18 +698,40 @@ export function Controller() {
                   spellCheck={false}
                 />
                 <Button
-                  onClick={handleAddYoutube}
+                  onClick={async () => {
+                    if (!youtubeUrlInput.trim()) return
+                    setAddingYoutube(true)
+                    try {
+                      const res = await fetch(apiUrl('/api/add-url'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: youtubeUrlInput.trim(), type: 'video' }),
+                      })
+                      const data = await res.json()
+                      if (data.file) {
+                        toast.success('Video agregado por URL')
+                        setYoutubeUrlInput('')
+                        await fetchMedia()
+                      } else {
+                        toast.error(data.error || 'Error al agregar URL')
+                      }
+                    } catch (e: any) {
+                      toast.error('Error: ' + e.message)
+                    } finally {
+                      setAddingYoutube(false)
+                    }
+                  }}
                   disabled={!youtubeUrlInput.trim() || addingYoutube}
-                  className="w-full bg-red-600 hover:bg-red-700"
+                  className="w-full bg-primary"
                 >
                   {addingYoutube ? (
                     <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Agregando...</>
                   ) : (
-                    <><Plus className="w-4 h-4 mr-2" /> Agregar a la biblioteca</>
+                    <><Plus className="w-4 h-4 mr-2" /> Agregar URL</>
                   )}
                 </Button>
                 <p className="text-xs text-white/50">
-                  La resolución se ajustará automáticamente a la máxima que soporte cada dispositivo
+                  Para Google Drive: usa enlace directo de descarga (formato: <code>https://drive.google.com/uc?export=download&id=FILE_ID</code>)
                 </p>
               </div>
             </Card>
@@ -701,8 +739,8 @@ export function Controller() {
             <Card className="glass-card p-4">
               <div className="flex items-center justify-between mb-3">
                 <Label className="text-base font-semibold text-white flex items-center gap-2">
-                  <Youtube className="w-4 h-4 text-red-500" />
-                  Biblioteca de YouTube ({youtubeFiles.length})
+                  <Video className="w-4 h-4 text-primary" />
+                  Biblioteca de Videos ({youtubeFiles.length})
                 </Label>
                 {selectedMedia.length > 0 && (
                   <Button
