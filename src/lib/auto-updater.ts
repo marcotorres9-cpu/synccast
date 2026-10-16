@@ -8,7 +8,7 @@ const WEB_VERSION_URL = 'https://synccast-repo.vercel.app/api/version'
 
 // This version is set at BUILD TIME of the APK
 // It's injected via env var NEXT_PUBLIC_APP_VERSION
-const CURRENT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.2.3'
+const CURRENT_VERSION = '2.1.0'
 
 export interface UpdateInfo {
   version: string
