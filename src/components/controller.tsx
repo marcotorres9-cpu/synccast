@@ -125,17 +125,24 @@ export function Controller() {
           })
 
           xhr.addEventListener('load', () => {
+            console.log('XHR load, status:', xhr.status, 'response length:', xhr.responseText?.length)
             if (xhr.status >= 200 && xhr.status < 300) {
               try {
                 const parsed = JSON.parse(xhr.responseText)
-                console.log('Cloudinary upload success:', parsed.secure_url)
-                resolve(parsed)
+                if (parsed.secure_url) {
+                  console.log('Cloudinary upload success:', parsed.secure_url)
+                  resolve(parsed)
+                } else {
+                  console.error('No secure_url in response:', parsed)
+                  reject(new Error('Cloudinary no devolvió URL'))
+                }
               } catch (e) {
                 console.error('Parse error, response:', xhr.responseText?.substring(0, 500))
                 reject(new Error('Error parseando respuesta de Cloudinary'))
               }
             } else {
-              reject(new Error(`Error ${xhr.status}: ${xhr.statusText}`))
+              console.error('XHR error status:', xhr.status, 'response:', xhr.responseText?.substring(0, 300))
+              reject(new Error(`Error ${xhr.status}: ${xhr.responseText?.substring(0, 100) || xhr.statusText}`))
             }
           })
 
@@ -148,7 +155,7 @@ export function Controller() {
             console.log('XHR loadend, status:', xhr.status, 'response:', xhr.responseText?.substring(0, 200))
           })
 
-          xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${resourceType}/upload`)
+          xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`)
           xhr.send(formData)
         })
 
