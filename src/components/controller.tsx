@@ -91,28 +91,24 @@ export function Controller() {
 
     for (const file of Array.from(files)) {
       try {
-        // Step 1: Get upload signature from our server
-        toast.info('Preparando subida...')
-        const sigRes = await fetch(apiUrl('/api/upload-signature'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileName: file.name, fileType: file.type }),
-        })
-        if (!sigRes.ok) {
-          throw new Error('No se pudo obtener permiso de subida')
-        }
-        const sigData = await sigRes.json()
+        toast.info(`Subiendo ${file.name}...`)
 
-        // Step 2: Upload directly to Cloudinary with progress tracking
-        // Using XMLHttpRequest for upload progress (fetch doesn't support it)
+        // Upload directly to Cloudinary using unsigned preset
+        // This works from any origin (APK, web, etc.)
+        const CLOUD_NAME = 'osm54nd0'
+        const UPLOAD_PRESET = 'synccast_unsigned'
+
+        // Determine resource type
+        const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mkv|mov|avi|m4v)$/i)
+        const isAudio = file.type.startsWith('audio/') || file.name.match(/\.(mp3|wav|ogg|m4a|flac|aac)$/i)
+        const resourceType = isVideo ? 'video' : isAudio ? 'audio' : 'auto'
+
         const result = await new Promise<any>((resolve, reject) => {
           const xhr = new XMLHttpRequest()
           const formData = new FormData()
           formData.append('file', file)
-          formData.append('public_id', sigData.publicId)
-          formData.append('timestamp', sigData.timestamp.toString())
-          formData.append('api_key', sigData.apiKey)
-          formData.append('signature', sigData.signature)
+          formData.append('upload_preset', UPLOAD_PRESET)
+          formData.append('folder', 'synccast')
 
           xhr.upload.addEventListener('progress', (e) => {
             if (e.lengthComputable) {
@@ -123,20 +119,24 @@ export function Controller() {
 
           xhr.addEventListener('load', () => {
             if (xhr.status >= 200 && xhr.status < 300) {
-              resolve(JSON.parse(xhr.responseText))
+              try {
+                resolve(JSON.parse(xhr.responseText))
+              } catch (e) {
+                reject(new Error('Error parseando respuesta'))
+              }
             } else {
-              reject(new Error(`Cloudinary error: ${xhr.statusText}`))
+              reject(new Error(`Error ${xhr.status}: ${xhr.statusText}`))
             }
           })
 
           xhr.addEventListener('error', () => reject(new Error('Error de red')))
           xhr.addEventListener('abort', () => reject(new Error('Subida cancelada')))
 
-          xhr.open('POST', sigData.uploadUrl)
+          xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${resourceType}/upload`)
           xhr.send(formData)
         })
 
-        // Step 3: Save to our database
+        // Save to our database
         const saveRes = await fetch(apiUrl('/api/save-media'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
