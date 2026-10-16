@@ -4,9 +4,9 @@ export const runtime = 'edge'
 
 export async function GET() {
   return NextResponse.json({
-    version: '1.2.3',
+    version: '2.0.0',
     deployedAt: '2026-10-15',
-    changelog: 'YouTube iframe embed fix for smart TVs',
+    changelog: 'Sistema de actualizaciones internas + Cloudinary',
   }, {
     headers: {
       'Access-Control-Allow-Origin': '*',
