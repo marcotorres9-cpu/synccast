@@ -24,7 +24,9 @@ async function uploadToCloudinary(file: File): Promise<any> {
 
   const timestamp = Math.floor(Date.now() / 1000)
   const crypto = await import('crypto')
-  const signatureParams = `public_id=${publicId}&timestamp=${timestamp}&resource_type=${resourceType}`
+  // Cloudinary signature: only include params that go in the signature (sorted alphabetically)
+  // resource_type goes in the form data but NOT in the signature
+  const signatureParams = `public_id=${publicId}&timestamp=${timestamp}`
   const signature = crypto.createHash('sha1').update(signatureParams + CLOUDINARY_API_SECRET).digest('hex')
 
   const formData = new FormData()
