@@ -82,45 +82,87 @@ export function Controller() {
   // --------------------------------------------------------
   // Upload files
   // --------------------------------------------------------
+  const [uploadProgress, setUploadProgress] = useState(0)
+
   const handleUpload = async (files: FileList | null, type: 'video' | 'audio') => {
     if (!files || files.length === 0) return
     setUploading(true)
-    try {
-      const formData = new FormData()
-      formData.append('type', type)
-      for (const file of Array.from(files)) {
-        formData.append('files', file)
-      }
-      const res = await fetch(apiUrl('/api/upload'), {
-        method: 'POST',
-        body: formData,
-      })
-      if (!res.ok) {
-        const errorText = await res.text()
-        console.error('Upload error response:', errorText)
-        let errorMsg = 'Error al subir archivos'
-        try {
-          const errorJson = JSON.parse(errorText)
-          errorMsg = errorJson.error || errorMsg
-        } catch {
-          errorMsg = errorText.substring(0, 200) || errorMsg
+    setUploadProgress(0)
+
+    for (const file of Array.from(files)) {
+      try {
+        // Step 1: Get upload signature from our server
+        toast.info('Preparando subida...')
+        const sigRes = await fetch(apiUrl('/api/upload-signature'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileName: file.name, fileType: file.type }),
+        })
+        if (!sigRes.ok) {
+          throw new Error('No se pudo obtener permiso de subida')
         }
-        toast.error(`Error: ${errorMsg}`)
-        return
+        const sigData = await sigRes.json()
+
+        // Step 2: Upload directly to Cloudinary with progress tracking
+        // Using XMLHttpRequest for upload progress (fetch doesn't support it)
+        const result = await new Promise<any>((resolve, reject) => {
+          const xhr = new XMLHttpRequest()
+          const formData = new FormData()
+          formData.append('file', file)
+          formData.append('public_id', sigData.publicId)
+          formData.append('timestamp', sigData.timestamp.toString())
+          formData.append('api_key', sigData.apiKey)
+          formData.append('signature', sigData.signature)
+
+          xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+              const percent = Math.round((e.loaded / e.total) * 100)
+              setUploadProgress(percent)
+            }
+          })
+
+          xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(JSON.parse(xhr.responseText))
+            } else {
+              reject(new Error(`Cloudinary error: ${xhr.statusText}`))
+            }
+          })
+
+          xhr.addEventListener('error', () => reject(new Error('Error de red')))
+          xhr.addEventListener('abort', () => reject(new Error('Subida cancelada')))
+
+          xhr.open('POST', sigData.uploadUrl)
+          xhr.send(formData)
+        })
+
+        // Step 3: Save to our database
+        const saveRes = await fetch(apiUrl('/api/save-media'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: file.name,
+            url: result.secure_url,
+            publicId: result.public_id,
+            size: result.bytes,
+            duration: result.duration || null,
+            type: type,
+          }),
+        })
+        const saveData = await saveRes.json()
+
+        if (saveData.file) {
+          toast.success(`"${file.name}" subido correctamente`)
+        }
+      } catch (e: any) {
+        toast.error(`Error subiendo ${file.name}: ${e.message}`)
       }
-      const data = await res.json()
-      if (data.files && data.files.length > 0) {
-        toast.success(`${data.files.length} archivo(s) subido(s) correctamente`)
-        await fetchMedia()
-      } else {
-        toast.error('Error: respuesta vacía del servidor')
-      }
-    } catch (e: any) {
-      toast.error('Error: ' + e.message)
-    } finally {
-      setUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
     }
+
+    await fetchMedia()
+    setUploading(false)
+    setUploadProgress(0)
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   // --------------------------------------------------------
@@ -465,7 +507,10 @@ export function Controller() {
                   disabled={uploading}
                 >
                   {uploading ? (
-                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                    <>
+                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                      {uploadProgress > 0 ? `${uploadProgress}%` : 'Subiendo...'}
+                    </>
                   ) : (
                     <Upload className="w-4 h-4 mr-1" />
                   )}
@@ -483,6 +528,20 @@ export function Controller() {
               <p className="text-xs text-white/50">
                 Formatos soportados: MP4, WebM, MKV, MOV
               </p>
+              {uploading && uploadProgress > 0 && (
+                <div className="mt-3 space-y-1">
+                  <div className="flex items-center justify-between text-xs text-white/60">
+                    <span>Subiendo a Cloudinary...</span>
+                    <span>{uploadProgress}%</span>
+                  </div>
+                  <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all duration-300"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </Card>
 
             <Card className="glass-card p-4">
@@ -577,7 +636,10 @@ export function Controller() {
                   disabled={uploading}
                 >
                   {uploading ? (
-                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                    <>
+                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                      {uploadProgress > 0 ? `${uploadProgress}%` : 'Subiendo...'}
+                    </>
                   ) : (
                     <Upload className="w-4 h-4 mr-1" />
                   )}
@@ -595,6 +657,20 @@ export function Controller() {
               <p className="text-xs text-white/50">
                 Formatos soportados: MP3, WAV, OGG, M4A, FLAC
               </p>
+              {uploading && uploadProgress > 0 && (
+                <div className="mt-3 space-y-1">
+                  <div className="flex items-center justify-between text-xs text-white/60">
+                    <span>Subiendo a Cloudinary...</span>
+                    <span>{uploadProgress}%</span>
+                  </div>
+                  <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all duration-300"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </Card>
 
             <Card className="glass-card p-4">
