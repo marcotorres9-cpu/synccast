@@ -3,8 +3,9 @@ import { CapacitorConfig } from '@capacitor/cli'
 const config: CapacitorConfig = {
   appId: 'com.synccast.app',
   appName: 'SyncCast',
-  webDir: 'out',
+  // No webDir - we load from server URL directly
   server: {
+    url: 'https://synccast-repo.vercel.app',
     androidScheme: 'https',
     cleartext: true,
   },
@@ -19,11 +20,6 @@ const config: CapacitorConfig = {
       backgroundColor: '#0d0820',
       showSpinner: false,
       androidScaleType: 'CENTER_CROP',
-    },
-    // Capgo Updater config - updates web content without rebuilding APK
-    Updater: {
-      autoUpdate: true,
-      resetWhenUpdate: true,
     },
   },
 }
