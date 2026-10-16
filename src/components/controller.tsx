@@ -120,23 +120,33 @@ export function Controller() {
           xhr.addEventListener('load', () => {
             if (xhr.status >= 200 && xhr.status < 300) {
               try {
-                resolve(JSON.parse(xhr.responseText))
+                const parsed = JSON.parse(xhr.responseText)
+                console.log('Cloudinary upload success:', parsed.secure_url)
+                resolve(parsed)
               } catch (e) {
-                reject(new Error('Error parseando respuesta'))
+                console.error('Parse error, response:', xhr.responseText?.substring(0, 500))
+                reject(new Error('Error parseando respuesta de Cloudinary'))
               }
             } else {
               reject(new Error(`Error ${xhr.status}: ${xhr.statusText}`))
             }
           })
 
-          xhr.addEventListener('error', () => reject(new Error('Error de red')))
+          xhr.addEventListener('error', () => {
+            console.error('XHR error event fired')
+            reject(new Error('Error de red al subir a Cloudinary'))
+          })
           xhr.addEventListener('abort', () => reject(new Error('Subida cancelada')))
+          xhr.addEventListener('loadend', () => {
+            console.log('XHR loadend, status:', xhr.status, 'response:', xhr.responseText?.substring(0, 200))
+          })
 
           xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${resourceType}/upload`)
           xhr.send(formData)
         })
 
         // Save to our database
+        console.log('Upload complete, saving to DB...', result.secure_url)
         const saveRes = await fetch(apiUrl('/api/save-media'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -149,17 +159,24 @@ export function Controller() {
             type: type,
           }),
         })
+        console.log('Save response status:', saveRes.status)
         const saveData = await saveRes.json()
+        console.log('Save response data:', saveData)
 
         if (saveData.file) {
           toast.success(`"${file.name}" subido correctamente`)
+        } else {
+          toast.error('Error: no se pudo guardar en la base de datos')
+          console.error('Save failed:', saveData)
         }
       } catch (e: any) {
         toast.error(`Error subiendo ${file.name}: ${e.message}`)
       }
     }
 
+    console.log('All uploads done, refreshing media list...')
     await fetchMedia()
+    console.log('Media refreshed')
     setUploading(false)
     setUploadProgress(0)
     if (fileInputRef.current) fileInputRef.current.value = ''
