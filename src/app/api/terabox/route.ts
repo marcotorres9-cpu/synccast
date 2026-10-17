@@ -23,27 +23,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'URL is required' }, { status: 400 })
     }
 
-    // Check if it's a Terabox SHARE URL (not a direct download link)
-    const isTeraboxShare = (url.includes('terabox.com/s/') || url.includes('1024terabox.com/s/'))
+    // Check if it's a Terabox SHARE URL
+    const isTeraboxShare = url.includes('terabox.com/s/') || url.includes('1024terabox.com/s/')
     
     if (isTeraboxShare) {
-      // Terabox share URLs cannot be extracted server-side without authentication
-      // The user needs to get the DIRECT download link instead
-      
       return NextResponse.json({
-        error: 'Los enlaces de Terabox (terabox.com/s/...) no se pueden reproducir directamente. Para usar un video de Terabox: 1) Abre el enlace en tu navegador 2) Toca "Download" 3) Copia el enlace directo que termina en .mp4 4) Pega ese enlace aquí'
+        error: 'Los enlaces de Terabox no se pueden reproducir directamente. Necesitas el enlace de descarga directa.'
       }, { status: 400 })
     }
-    
-    // If it's a Google Drive URL (any format), convert and save
+
+    // Handle Google Drive URLs - convert to direct download
     if (url.includes('drive.google.com') || url.includes('drive.usercontent.google.com')) {
-      // Extract file ID
       const match = url.match(/[/d=]([a-zA-Z0-9_-]{25,})/)
       if (match) {
         const fileId = match[1]
-        // Use the direct download URL that returns video/mp4
         const directUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`
-        const fileName = name || `Video de Google Drive (${fileId.substring(0, 8)}...)`
+        const fileName = name || `Video de Google Drive`
         
         const media = await db.mediaFile.create({
           data: {
@@ -66,58 +61,10 @@ export async function POST(req: NextRequest) {
         })
       }
     }
-      const fileName = name || 'Video de Google Drive'
-      
-      const media = await db.mediaFile.create({
-        data: {
-          name: fileName,
-          filename: url,
-          filePath: url,
-          size: 0,
-          mimeType: 'video/mp4',
-          type: 'video',
-        },
-      })
-      
-      return NextResponse.json({
-        file: {
-          id: media.id,
-          name: media.name,
-          url: media.filePath,
-          type: 'video',
-        },
-      })
-    }
-    
-    // If it's a direct .mp4 URL (from Terabox download or anywhere else), save it
-    const isDirectVideo = url.match(/\.(mp4|webm|mkv|mov|m4v)(\?|$)/i)
-    
-    if (isDirectVideo || url.includes('d.terabox.com') || url.includes('d-aa') || url.includes('download')) {
-      const fileName = name || url.split('/').pop()?.split('?')[0] || 'Video Externo'
-      
-      const media = await db.mediaFile.create({
-        data: {
-          name: fileName,
-          filename: url,
-          filePath: url,
-          size: 0,
-          mimeType: 'video/mp4',
-          type: 'video',
-        },
-      })
-      
-      return NextResponse.json({
-        file: {
-          id: media.id,
-          name: media.name,
-          url: media.filePath,
-          type: 'video',
-        },
-      })
-    }
-    
-    // For any other URL, try to save it (might work for Google Drive, etc.)
-    const resolvedType = url.match(/\.(mp3|wav|ogg|m4a|flac|aac)$/i) ? 'audio' : 'video'
+
+    // For any other URL, save it directly
+    const isDirectVideo = url.match(/\.(mp4|webm|mkv|mov|m4v)/i)
+    const resolvedType = isDirectVideo ? 'video' : 'video'
     const fileName = name || url.split('/').pop()?.split('?')[0] || 'Video Externo'
     
     const media = await db.mediaFile.create({
@@ -126,7 +73,7 @@ export async function POST(req: NextRequest) {
         filename: url,
         filePath: url,
         size: 0,
-        mimeType: 'application/octet-stream',
+        mimeType: 'video/mp4',
         type: resolvedType,
       },
     })
@@ -136,7 +83,7 @@ export async function POST(req: NextRequest) {
         id: media.id,
         name: media.name,
         url: media.filePath,
-        type: media.type,
+        type: 'video',
       },
     })
   } catch (e: any) {
