@@ -821,29 +821,62 @@ export function Controller() {
                     try {
                       const url = youtubeUrlInput.trim()
                       const isTerabox = url.includes('terabox') || url.includes('1024terabox')
+                      const isGoogleDrive = url.includes('drive.google.com')
                       
-                      // Use the terabox endpoint which extracts direct URLs
+                      console.log('Adding URL:', url, 'isTerabox:', isTerabox, 'isDrive:', isGoogleDrive)
+                      
+                      // Convert Google Drive share URL to direct download URL
+                      let finalUrl = url
+                      if (isGoogleDrive) {
+                        // Extract file ID from various Google Drive URL formats
+                        const patterns = [
+                          /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/,
+                          /drive\.google\.com\/open\?id=([a-zA-Z0-9_-]+)/,
+                          /drive\.google\.com\/uc\?id=([a-zA-Z0-9_-]+)/,
+                        ]
+                        let fileId = null
+                        for (const pattern of patterns) {
+                          const match = url.match(pattern)
+                          if (match) {
+                            fileId = match[1]
+                            break
+                          }
+                        }
+                        if (fileId) {
+                          // Convert to direct download URL
+                          finalUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
+                          console.log('Converted Drive URL:', finalUrl)
+                        }
+                      }
+                      
+                      // Use the terabox endpoint for terabox, add-url for others
+                      // ALWAYS use direct Vercel URL for reliability
                       const endpoint = isTerabox ? '/api/terabox' : '/api/add-url'
-                      const res = await fetch(apiUrl(endpoint), {
+                      const fullUrl = `https://synccast-repo.vercel.app${endpoint}`
+                      
+                      console.log('Fetching:', fullUrl)
+                      const res = await fetch(fullUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url: url, type: 'video' }),
+                        body: JSON.stringify({ url: finalUrl, type: 'video' }),
                       })
+                      console.log('Response status:', res.status)
                       const data = await res.json()
+                      console.log('Response data:', data)
+                      
                       if (data.file) {
-                        toast.success(isTerabox ? 'Video de Terabox agregado' : 'Video agregado por URL')
+                        toast.success(`"${data.file.name}" agregado correctamente`)
                         setYoutubeUrlInput('')
                         await fetchMedia()
                       } else {
-                        // Show error in a more visible way
                         const errorMsg = data.error || 'Error al agregar URL'
                         toast.error(errorMsg, { duration: 8000 })
-                        // Also show in a dialog for long messages
                         if (errorMsg.length > 100) {
                           alert(errorMsg)
                         }
                       }
                     } catch (e: any) {
+                      console.error('Add URL error:', e)
                       toast.error('Error: ' + e.message)
                     } finally {
                       setAddingYoutube(false)
