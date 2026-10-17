@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { apiUrl, getServerUrl, setServerUrl } from '@/lib/server-url'
+import { compressVideo } from '@/lib/video-compressor'
 import { getCurrentVersion } from '@/lib/auto-updater'
 import { notifyServerUrlChanged } from '@/hooks/use-sync-socket'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -90,6 +91,7 @@ export function Controller() {
   // Upload files
   // --------------------------------------------------------
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [compressing, setCompressing] = useState(false)
 
   const handleUpload = async (files: FileList | null, type: 'video' | 'audio') => {
     if (!files || files.length === 0) return
@@ -98,7 +100,25 @@ export function Controller() {
 
     for (const file of Array.from(files)) {
       try {
-        toast.info(`Subiendo ${file.name}...`)
+        let fileToUpload: File | Blob = file
+        let uploadName = file.name
+
+        // Compress if file is larger than 80MB
+        if (file.size > 80 * 1024 * 1024) {
+          toast.info(`Comprimiendo ${file.name} (puede tardar un minuto)...`)
+          setCompressing(true)
+          const compressed = await compressVideo(file, (p) => {
+            setUploadProgress(Math.round(p * 0.5)) // compression is first 50%
+          })
+          if (compressed.compressed) {
+            fileToUpload = compressed.blob
+            toast.info(`Video comprimido: ${(compressed.originalSize / 1024 / 1024).toFixed(0)}MB -> ${(compressed.size / 1024 / 1024).toFixed(0)}MB`)
+          }
+          setCompressing(false)
+          setUploadProgress(0)
+        }
+
+        toast.info(`Subiendo ${uploadName}...`)
 
         const CLOUD_NAME = 'osm54nd0'
         const UPLOAD_PRESET = 'synccast_unsigned'
@@ -115,7 +135,7 @@ export function Controller() {
           toast.info('Subiendo archivo grande (puede tardar varios minutos)...')
           
           const formData = new FormData()
-          formData.append('files', file)
+          formData.append('files', fileToUpload)
           formData.append('type', type)
           
           let uploadRes
@@ -158,7 +178,7 @@ export function Controller() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              name: file.name,
+              name: uploadName,
               url: result.secure_url,
               publicId: result.public_id,
               size: result.bytes,
@@ -172,7 +192,7 @@ export function Controller() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              name: file.name,
+              name: uploadName,
               url: result.secure_url,
               publicId: result.public_id,
               size: result.bytes,
@@ -205,7 +225,7 @@ export function Controller() {
     return new Promise<any>((resolve, reject) => {
       const xhr = new XMLHttpRequest()
       const formData = new FormData()
-      formData.append('file', file)
+      formData.append('file', fileToUpload)
       formData.append('upload_preset', preset)
       formData.append('folder', 'synccast')
 
@@ -600,10 +620,10 @@ export function Controller() {
               <p className="text-xs text-white/50">
                 Formatos soportados: MP4, WebM, MKV, MOV
               </p>
-              {uploading && uploadProgress > 0 && (
+              {(uploading || compressing) && uploadProgress >= 0 && (
                 <div className="mt-3 space-y-1">
                   <div className="flex items-center justify-between text-xs text-white/60">
-                    <span>Subiendo a Cloudinary...</span>
+                    <span>{compressing ? 'Comprimiendo video...' : 'Subiendo a Cloudinary...'}</span>
                     <span>{uploadProgress}%</span>
                   </div>
                   <div className="h-2 bg-white/10 rounded-full overflow-hidden">
@@ -729,10 +749,10 @@ export function Controller() {
               <p className="text-xs text-white/50">
                 Formatos soportados: MP3, WAV, OGG, M4A, FLAC
               </p>
-              {uploading && uploadProgress > 0 && (
+              {(uploading || compressing) && uploadProgress >= 0 && (
                 <div className="mt-3 space-y-1">
                   <div className="flex items-center justify-between text-xs text-white/60">
-                    <span>Subiendo a Cloudinary...</span>
+                    <span>{compressing ? 'Comprimiendo video...' : 'Subiendo a Cloudinary...'}</span>
                     <span>{uploadProgress}%</span>
                   </div>
                   <div className="h-2 bg-white/10 rounded-full overflow-hidden">
