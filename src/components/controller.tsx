@@ -100,66 +100,26 @@ export function Controller() {
       try {
         toast.info(`Subiendo ${file.name}...`)
 
-        // Upload directly to Cloudinary using unsigned preset
-        // This works from any origin (APK, web, etc.)
         const CLOUD_NAME = 'osm54nd0'
         const UPLOAD_PRESET = 'synccast_unsigned'
-
-        // Determine resource type
         const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mkv|mov|avi|m4v)$/i)
         const isAudio = file.type.startsWith('audio/') || file.name.match(/\.(mp3|wav|ogg|m4a|flac|aac)$/i)
         const resourceType = isVideo ? 'video' : isAudio ? 'audio' : 'auto'
 
-        const result = await new Promise<any>((resolve, reject) => {
-          const xhr = new XMLHttpRequest()
-          const formData = new FormData()
-          formData.append('file', file)
-          formData.append('upload_preset', UPLOAD_PRESET)
-          formData.append('folder', 'synccast')
+        let result: any
 
-          xhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable) {
-              const percent = Math.round((e.loaded / e.total) * 100)
-              setUploadProgress(percent)
-            }
-          })
+        // For files larger than 90MB, use chunked upload API
+        // Cloudinary free tier limits single upload to 100MB
+        // Chunked upload allows up to 2GB
+        if (file.size > 90 * 1024 * 1024) {
+          console.log('Large file detected, using chunked upload:', file.size, 'bytes')
+          result = await uploadChunked(file, CLOUD_NAME, UPLOAD_PRESET, resourceType, setUploadProgress)
+        } else {
+          // Small file: regular unsigned upload
+          result = await uploadDirect(file, CLOUD_NAME, UPLOAD_PRESET, resourceType, setUploadProgress)
+        }
 
-          xhr.addEventListener('load', () => {
-            console.log('XHR load, status:', xhr.status, 'response length:', xhr.responseText?.length)
-            if (xhr.status >= 200 && xhr.status < 300) {
-              try {
-                const parsed = JSON.parse(xhr.responseText)
-                if (parsed.secure_url) {
-                  console.log('Cloudinary upload success:', parsed.secure_url)
-                  resolve(parsed)
-                } else {
-                  console.error('No secure_url in response:', parsed)
-                  reject(new Error('Cloudinary no devolvió URL'))
-                }
-              } catch (e) {
-                console.error('Parse error, response:', xhr.responseText?.substring(0, 500))
-                reject(new Error('Error parseando respuesta de Cloudinary'))
-              }
-            } else {
-              console.error('XHR error status:', xhr.status, 'response:', xhr.responseText?.substring(0, 300))
-              reject(new Error(`Error ${xhr.status}: ${xhr.responseText?.substring(0, 100) || xhr.statusText}`))
-            }
-          })
-
-          xhr.addEventListener('error', () => {
-            console.error('XHR error event fired')
-            reject(new Error('Error de red al subir a Cloudinary'))
-          })
-          xhr.addEventListener('abort', () => reject(new Error('Subida cancelada')))
-          xhr.addEventListener('loadend', () => {
-            console.log('XHR loadend, status:', xhr.status, 'response:', xhr.responseText?.substring(0, 200))
-          })
-
-          xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`)
-          xhr.send(formData)
-        })
-
-        // Save to our database - with fallback URLs
+        // Save to database
         console.log('Upload complete, saving to DB...', result.secure_url)
         let saveRes
         try {
@@ -177,7 +137,6 @@ export function Controller() {
           })
         } catch (fetchErr) {
           console.error('Fetch error, trying direct URL:', fetchErr)
-          // Fallback: try direct Vercel URL
           saveRes = await fetch('https://synccast-repo.vercel.app/api/save-media', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -191,27 +150,139 @@ export function Controller() {
             }),
           })
         }
-        console.log('Save response status:', saveRes.status)
         const saveData = await saveRes.json()
-        console.log('Save response data:', saveData)
 
         if (saveData.file) {
           toast.success(`"${file.name}" subido correctamente`)
         } else {
           toast.error('Error guardando: ' + (saveData.error || 'desconocido'))
-          console.error('Save failed:', saveData)
         }
       } catch (e: any) {
         toast.error(`Error subiendo ${file.name}: ${e.message}`)
+        console.error('Upload error:', e)
       }
     }
 
-    console.log('All uploads done, refreshing media list...')
     await fetchMedia()
-    console.log('Media refreshed')
     setUploading(false)
     setUploadProgress(0)
     if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  // Direct upload for files < 90MB
+  const uploadDirect = async (file: File, cloudName: string, preset: string, resourceType: string, onProgress: (p: number) => void) => {
+    return new Promise<any>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('upload_preset', preset)
+      formData.append('folder', 'synccast')
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          onProgress(Math.round((e.loaded / e.total) * 100))
+        }
+      })
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const parsed = JSON.parse(xhr.responseText)
+            if (parsed.secure_url) resolve(parsed)
+            else reject(new Error('Cloudinary no devolvió URL'))
+          } catch (e) {
+            reject(new Error('Error parseando respuesta'))
+          }
+        } else {
+          reject(new Error(`Error ${xhr.status}: ${xhr.responseText?.substring(0, 100)}`))
+        }
+      })
+
+      xhr.addEventListener('error', () => reject(new Error('Error de red')))
+      xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`)
+      xhr.send(formData)
+    })
+  }
+
+  // Chunked upload for files > 90MB (up to 2GB)
+  // Uses Cloudinary's chunked upload API
+  const uploadChunked = async (file: File, cloudName: string, preset: string, resourceType: string, onProgress: (p: number) => void) => {
+    const CHUNK_SIZE = 20 * 1024 * 1024 // 20MB per chunk
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+    let uploadedBytes = 0
+    
+    // Step 1: Initialize upload session
+    console.log('Initializing chunked upload:', totalChunks, 'chunks')
+    const initRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload-init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: file.name,
+        bytes: file.size,
+        resource_type: resourceType,
+        upload_preset: preset,
+        folder: 'synccast',
+      }),
+    })
+    
+    if (!initRes.ok) {
+      throw new Error('No se pudo inicializar la subida por chunks')
+    }
+    
+    const initData = await initRes.json()
+    const uploadId = initData.upload_id
+    const uploadUrl = initData.upload_url
+    
+    console.log('Upload session started:', uploadId)
+    
+    // Step 2: Upload each chunk
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE
+      const end = Math.min(start + CHUNK_SIZE, file.size)
+      const chunk = file.slice(start, end)
+      
+      console.log(`Uploading chunk ${i + 1}/${totalChunks} (${end - start} bytes)`)
+      
+      const chunkRes = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: chunk,
+      })
+      
+      if (!chunkRes.ok) {
+        throw new Error(`Error subiendo chunk ${i + 1}: ${chunkRes.statusText}`)
+      }
+      
+      uploadedBytes += (end - start)
+      const progress = Math.round((uploadedBytes / file.size) * 100)
+      onProgress(progress)
+    }
+    
+    // Step 3: Finalize upload
+    console.log('Finalizing chunked upload...')
+    const finalizeRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload-final`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        upload_id: uploadId,
+        filename: file.name,
+        upload_preset: preset,
+        folder: 'synccast',
+      }),
+    })
+    
+    if (!finalizeRes.ok) {
+      throw new Error('Error finalizando subida')
+    }
+    
+    const result = await finalizeRes.json()
+    
+    if (result.secure_url) {
+      console.log('Chunked upload complete:', result.secure_url)
+      return result
+    } else {
+      throw new Error('Cloudinary no devolvió URL después de chunked upload')
+    }
   }
 
   // --------------------------------------------------------
