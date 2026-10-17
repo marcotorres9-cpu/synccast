@@ -8,12 +8,12 @@ import {
   Download, Smartphone, Tv, Cast, Zap, Wifi, Volume2, Monitor,
   CheckCircle2, ArrowRight, Github, ExternalLink, Star, Shield,
   Music, Video, Play, Clock, Cpu, Globe, ChevronDown, ChevronRight,
-  AlertCircle, Package, RefreshCw, Youtube, Upload, Server, Database
+  AlertCircle, Package, RefreshCw, Cloud, Video, Tv
 } from 'lucide-react'
 
 export default function DownloadPage() {
-  const [apkSize, setApkSize] = useState<string>('4.2 MB')
-  const [version] = useState('1.1.6')
+  const [apkSize, setApkSize] = useState<string>('5.1 MB')
+  const [version] = useState('2.1.0')
   const [releaseDate] = useState('15 Octubre 2026')
   const [downloading, setDownloading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState(0)
@@ -21,7 +21,7 @@ export default function DownloadPage() {
 
   useEffect(() => {
     // Fetch APK size from HEAD request
-    fetch('/downloads/SyncCast-v1.1.6.apk', { method: 'HEAD' })
+    fetch('https://github.com/marcotorres9-cpu/synccast/releases/download/v2.1.0/SyncCast-v2.1.0.apk', { method: 'HEAD' })
       .then((res) => {
         const size = parseInt(res.headers.get('content-length') || '0', 10)
         if (size > 0) {
@@ -36,7 +36,7 @@ export default function DownloadPage() {
     setDownloading(true)
     setDownloadProgress(0)
     try {
-      const res = await fetch('/downloads/SyncCast-v1.1.6.apk')
+      const res = await fetch('https://github.com/marcotorres9-cpu/synccast/releases/download/v2.1.0/SyncCast-v2.1.0.apk')
       const contentLength = res.headers.get('content-length')
       const total = contentLength ? parseInt(contentLength, 10) : 0
       const reader = res.body?.getReader()
@@ -65,7 +65,7 @@ export default function DownloadPage() {
       URL.revokeObjectURL(url)
     } catch (e) {
       // Fallback: direct link
-      window.location.href = '/downloads/SyncCast-v1.1.6.apk'
+      window.location.href = 'https://github.com/marcotorres9-cpu/synccast/releases/download/v2.1.0/SyncCast-v2.1.0.apk'
     } finally {
       setTimeout(() => {
         setDownloading(false)
@@ -217,28 +217,28 @@ export default function DownloadPage() {
 
           <div className="grid sm:grid-cols-2 gap-4">
             <ReleaseNote
-              icon={<Youtube className="w-5 h-5" />}
-              title="Soporte para YouTube"
-              desc="Reproduce cualquier video de YouTube en todos tus TVs sincronizadamente. La resolución se ajusta automáticamente a la máxima que soporte cada dispositivo (hasta 4K)."
+              icon={<Cloud className="w-5 h-5" />}
+              title="Subida directa a Cloudinary"
+              desc="Sube videos de cualquier tamaño (100MB+) directamente a Cloudinary con barra de progreso en tiempo real. Sin límites de Vercel."
               tag="NUEVO"
             />
             <ReleaseNote
-              icon={<Upload className="w-5 h-5" />}
-              title="Subida de archivos grandes"
-              desc="Integración con Cloudinary para subir videos pesados sin límite de tamaño. Configura tus credenciales en Vercel para activarlo."
+              icon={<RefreshCw className="w-5 h-5" />}
+              title="Actualización automática"
+              desc="El APK carga desde Vercel en vivo. Cuando actualizamos la web, tu app se actualiza sola. ¡No más descargas manuales!"
+              tag="NUEVO"
+            />
+            <ReleaseNote
+              icon={<Tv className="w-5 h-5" />}
+              title="Compatible con Smart TVs"
+              desc="Funciona en Android TV, Google TV, Fire TV Stick y Smart TVs con navegador (ZITRO, Samsung, LG)."
               tag="MEJORADO"
             />
             <ReleaseNote
-              icon={<Server className="w-5 h-5" />}
-              title="WebSocket optimizado"
-              desc="Servidor WebSocket sin dependencias externas. Más rápido, más estable, deploy instantáneo en Render."
-              tag="OPTIMIZADO"
-            />
-            <ReleaseNote
-              icon={<Database className="w-5 h-5" />}
-              title="Base de datos Neon"
-              desc="Persistencia confiable con PostgreSQL en Neon. Tus archivos y playlists se mantienen entre sesiones."
-              tag="NUEVO"
+              icon={<Video className="w-5 h-5" />}
+              title="Reproducción de videos MP4"
+              desc="Reproduce videos MP4 en 4K sincronizadamente en hasta 10 TVs. Control total desde tu celular."
+              tag="MEJORADO"
             />
           </div>
 
@@ -246,7 +246,7 @@ export default function DownloadPage() {
             <div className="flex gap-3">
               <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-white/80">
-                <strong className="text-amber-400">Si ya tienes la v1.0.0 instalada:</strong> Desinstálala primero
+                <strong className="text-amber-400">Si tienes una versión anterior:</strong> Desinstálala primero
                 (Ajustes → Apps → SyncCast → Desinstalar) y luego instala la nueva versión. Tus TVs y configuración
                 se mantienen porque se guardan en el navegador del TV, no en el APK.
               </div>
