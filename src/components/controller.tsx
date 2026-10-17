@@ -830,11 +830,13 @@ export function Controller() {
                       let videoName = null
                       if (isGoogleDrive) {
                         // Extract file ID from Google Drive URL
-                        // Works with: /file/d/FILE_ID/view, ?id=FILE_ID, /uc?id=FILE_ID
                         const match = url.match(/[/d=]([a-zA-Z0-9_-]{25,})/)
                         if (match) {
                           const fileId = match[1]
-                          finalUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
+                          // Use the direct download URL that returns the video file directly
+                          // This format works with <video> tag on all browsers/TVs
+                          finalUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`
+                          videoName = `Video de Google Drive (${fileId.substring(0, 8)}...)`
                           console.log('Converted Drive URL:', finalUrl)
                         } else {
                           console.log('Could not extract file ID from:', url)

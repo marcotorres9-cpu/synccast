@@ -35,8 +35,37 @@ export async function POST(req: NextRequest) {
       }, { status: 400 })
     }
     
-    // If it's a Google Drive direct download URL, save it
-    if (url.includes('drive.google.com/uc?export=download')) {
+    // If it's a Google Drive URL (any format), convert and save
+    if (url.includes('drive.google.com') || url.includes('drive.usercontent.google.com')) {
+      // Extract file ID
+      const match = url.match(/[/d=]([a-zA-Z0-9_-]{25,})/)
+      if (match) {
+        const fileId = match[1]
+        // Use the direct download URL that returns video/mp4
+        const directUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`
+        const fileName = name || `Video de Google Drive (${fileId.substring(0, 8)}...)`
+        
+        const media = await db.mediaFile.create({
+          data: {
+            name: fileName,
+            filename: directUrl,
+            filePath: directUrl,
+            size: 0,
+            mimeType: 'video/mp4',
+            type: 'video',
+          },
+        })
+        
+        return NextResponse.json({
+          file: {
+            id: media.id,
+            name: media.name,
+            url: media.filePath,
+            type: 'video',
+          },
+        })
+      }
+    }
       const fileName = name || 'Video de Google Drive'
       
       const media = await db.mediaFile.create({
