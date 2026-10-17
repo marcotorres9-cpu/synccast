@@ -8,7 +8,7 @@ import {
   Download, Smartphone, Tv, Cast, Zap, Wifi, Volume2, Monitor,
   CheckCircle2, ArrowRight, Github, ExternalLink, Star, Shield,
   Music, Video, Play, Clock, Cpu, Globe, ChevronDown, ChevronRight,
-  AlertCircle, Package, RefreshCw, Cloud, Video, Tv
+  AlertCircle, Package, RefreshCw, Cloud
 } from 'lucide-react'
 
 export default function DownloadPage() {
