@@ -806,7 +806,7 @@ export function Controller() {
               </Label>
               <div className="space-y-3">
                 <Input
-                  placeholder="Pega URL de Terabox, Google Drive, o URL directa .mp4"
+                  placeholder="Pega URL de Terabox, Google Drive, o .mp4 directo"
                   className="glass border-white/10"
                   value={youtubeUrlInput}
                   onChange={(e) => setYoutubeUrlInput(e.target.value)}
@@ -819,14 +819,19 @@ export function Controller() {
                     if (!youtubeUrlInput.trim()) return
                     setAddingYoutube(true)
                     try {
-                      const res = await fetch(apiUrl('/api/add-url'), {
+                      const url = youtubeUrlInput.trim()
+                      const isTerabox = url.includes('terabox') || url.includes('1024terabox')
+                      
+                      // Use the terabox endpoint which extracts direct URLs
+                      const endpoint = isTerabox ? '/api/terabox' : '/api/add-url'
+                      const res = await fetch(apiUrl(endpoint), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url: youtubeUrlInput.trim(), type: 'video' }),
+                        body: JSON.stringify({ url: url, type: 'video' }),
                       })
                       const data = await res.json()
                       if (data.file) {
-                        toast.success('Video agregado por URL')
+                        toast.success(isTerabox ? 'Video de Terabox agregado' : 'Video agregado por URL')
                         setYoutubeUrlInput('')
                         await fetchMedia()
                       } else {
