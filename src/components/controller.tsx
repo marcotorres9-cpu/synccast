@@ -98,37 +98,85 @@ export function Controller() {
 
     for (const file of Array.from(files)) {
       try {
-        toast.info(`Subiendo ${file.name}...`)
+        const isLargeFile = file.size > 90 * 1024 * 1024 // >90MB
+        toast.info(`${isLargeFile ? 'Subiendo archivo grande' : 'Subiendo'} ${file.name}...`)
 
-        // Upload to our server proxy which handles Cloudinary upload
-        // The server uses signed upload (no 100MB browser limit)
-        const formData = new FormData()
-        formData.append('file', file)
-        formData.append('type', type)
+        // Step 1: Get signature from server
+        const sigRes = await fetch('https://synccast-repo.vercel.app/api/upload-signature', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileName: file.name, fileType: file.type }),
+        })
+        if (!sigRes.ok) throw new Error('No se pudo obtener permiso de subida')
+        const sigData = await sigRes.json()
 
+        // Step 2: Upload directly to Cloudinary from browser
+        // Signed uploads bypass CORS and have higher limits
         const result = await new Promise<any>((resolve, reject) => {
           const xhr = new XMLHttpRequest()
+          const formData = new FormData()
+          formData.append('file', file)
+          formData.append('public_id', sigData.publicId)
+          formData.append('timestamp', sigData.timestamp.toString())
+          formData.append('api_key', sigData.apiKey)
+          formData.append('signature', sigData.signature)
+
           xhr.upload.addEventListener('progress', (e) => {
             if (e.lengthComputable) {
               setUploadProgress(Math.round((e.loaded / e.total) * 100))
             }
           })
+
           xhr.addEventListener('load', () => {
+            console.log('Upload response status:', xhr.status)
             if (xhr.status >= 200 && xhr.status < 300) {
-              resolve(JSON.parse(xhr.responseText))
+              try {
+                const parsed = JSON.parse(xhr.responseText)
+                if (parsed.secure_url) {
+                  resolve(parsed)
+                } else {
+                  reject(new Error('Cloudinary no devolvió URL: ' + JSON.stringify(parsed).substring(0, 200)))
+                }
+              } catch (e) {
+                reject(new Error('Error parseando: ' + xhr.responseText?.substring(0, 200)))
+              }
             } else {
-              reject(new Error(`Error ${xhr.status}: ${xhr.responseText?.substring(0, 100)}`))
+              let errorMsg = `Error ${xhr.status}`
+              try {
+                const errData = JSON.parse(xhr.responseText)
+                errorMsg = errData.error?.message || errorMsg
+              } catch {}
+              reject(new Error(errorMsg))
             }
           })
-          xhr.addEventListener('error', () => reject(new Error('Error de red')))
-          xhr.open('POST', 'https://synccast-repo.vercel.app/api/upload-proxy')
+
+          xhr.addEventListener('error', () => reject(new Error('Error de red. Verifica tu conexión.')))
+          xhr.addEventListener('abort', () => reject(new Error('Subida cancelada')))
+
+          // Use the resource type from the signature
+          xhr.open('POST', sigData.uploadUrl)
           xhr.send(formData)
         })
 
-        if (result.files && result.files.length > 0) {
-          toast.success(`"${file.name}" subido correctamente`)
+        // Step 3: Save to database
+        const saveRes = await fetch('https://synccast-repo.vercel.app/api/save-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: file.name,
+            url: result.secure_url,
+            publicId: result.public_id,
+            size: result.bytes,
+            duration: result.duration || null,
+            type: type,
+          }),
+        })
+        const saveData = await saveRes.json()
+
+        if (saveData.file) {
+          toast.success(`"${file.name}" subido (${(result.bytes / 1024 / 1024).toFixed(1)} MB)`)
         } else {
-          throw new Error(result.error || 'Error desconocido')
+          toast.error('Error guardando en BD')
         }
       } catch (e: any) {
         toast.error(`Error: ${e.message}`)
