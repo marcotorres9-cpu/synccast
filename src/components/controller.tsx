@@ -835,7 +835,13 @@ export function Controller() {
                         setYoutubeUrlInput('')
                         await fetchMedia()
                       } else {
-                        toast.error(data.error || 'Error al agregar URL')
+                        // Show error in a more visible way
+                        const errorMsg = data.error || 'Error al agregar URL'
+                        toast.error(errorMsg, { duration: 8000 })
+                        // Also show in a dialog for long messages
+                        if (errorMsg.length > 100) {
+                          alert(errorMsg)
+                        }
                       }
                     } catch (e: any) {
                       toast.error('Error: ' + e.message)
