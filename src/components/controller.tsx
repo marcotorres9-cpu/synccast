@@ -19,7 +19,6 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { apiUrl, getServerUrl, setServerUrl } from '@/lib/server-url'
-import { compressVideo } from '@/lib/video-compressor'
 import { getCurrentVersion } from '@/lib/auto-updater'
 import { notifyServerUrlChanged } from '@/hooks/use-sync-socket'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -91,7 +90,6 @@ export function Controller() {
   // Upload files
   // --------------------------------------------------------
   const [uploadProgress, setUploadProgress] = useState(0)
-  const [compressing, setCompressing] = useState(false)
 
   const handleUpload = async (files: FileList | null, type: 'video' | 'audio') => {
     if (!files || files.length === 0) return
@@ -100,116 +98,40 @@ export function Controller() {
 
     for (const file of Array.from(files)) {
       try {
-        let fileToUpload: File | Blob = file
-        let uploadName = file.name
+        toast.info(`Subiendo ${file.name}...`)
 
-        // Compress if file is larger than 80MB
-        if (file.size > 80 * 1024 * 1024) {
-          toast.info(`Comprimiendo ${file.name} (puede tardar un minuto)...`)
-          setCompressing(true)
-          const compressed = await compressVideo(file, (p) => {
-            setUploadProgress(Math.round(p * 0.5)) // compression is first 50%
+        // Upload to our server proxy which handles Cloudinary upload
+        // The server uses signed upload (no 100MB browser limit)
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('type', type)
+
+        const result = await new Promise<any>((resolve, reject) => {
+          const xhr = new XMLHttpRequest()
+          xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+              setUploadProgress(Math.round((e.loaded / e.total) * 100))
+            }
           })
-          if (compressed.compressed) {
-            fileToUpload = compressed.blob
-            toast.info(`Video comprimido: ${(compressed.originalSize / 1024 / 1024).toFixed(0)}MB -> ${(compressed.size / 1024 / 1024).toFixed(0)}MB`)
-          }
-          setCompressing(false)
-          setUploadProgress(0)
-        }
-
-        toast.info(`Subiendo ${uploadName}...`)
-
-        const CLOUD_NAME = 'osm54nd0'
-        const UPLOAD_PRESET = 'synccast_unsigned'
-        const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mkv|mov|avi|m4v)$/i)
-        const isAudio = file.type.startsWith('audio/') || file.name.match(/\.(mp3|wav|ogg|m4a|flac|aac)$/i)
-        const resourceType = isVideo ? 'video' : isAudio ? 'audio' : 'auto'
-
-        let result: any
-
-        // For files larger than 80MB, use server-side proxy upload
-        // This bypasses Cloudinary's 100MB browser upload limit
-        if (file.size > 80 * 1024 * 1024) {
-          console.log('Large file detected, using server proxy:', file.size, 'bytes')
-          toast.info('Subiendo archivo grande (puede tardar varios minutos)...')
-          
-          const formData = new FormData()
-          formData.append('files', fileToUpload)
-          formData.append('type', type)
-          
-          let uploadRes
-          try {
-            uploadRes = await fetch(apiUrl('/api/upload-large'), {
-              method: 'POST',
-              body: formData,
-            })
-          } catch (fetchErr) {
-            console.error('Fetch error, trying direct URL:', fetchErr)
-            uploadRes = await fetch('https://synccast-repo.vercel.app/api/upload-large', {
-              method: 'POST',
-              body: formData,
-            })
-          }
-          
-          if (!uploadRes.ok) {
-            const errText = await uploadRes.text()
-            throw new Error(`Error del servidor: ${errText.substring(0, 200)}`)
-          }
-          
-          const uploadData = await uploadRes.json()
-          if (uploadData.files && uploadData.files.length > 0) {
-            toast.success(`"${file.name}" subido correctamente`)
-            setUploadProgress(100)
-            continue // Skip the rest, file is already saved
-          } else {
-            throw new Error(uploadData.error || 'Error desconocido en subida grande')
-          }
-        } else {
-          // Small file: direct unsigned upload to Cloudinary
-          result = await uploadDirect(file, CLOUD_NAME, UPLOAD_PRESET, resourceType, setUploadProgress)
-        }
-
-        // Save to database
-        console.log('Upload complete, saving to DB...', result.secure_url)
-        let saveRes
-        try {
-          saveRes = await fetch(apiUrl('/api/save-media'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: uploadName,
-              url: result.secure_url,
-              publicId: result.public_id,
-              size: result.bytes,
-              duration: result.duration || null,
-              type: type,
-            }),
+          xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(JSON.parse(xhr.responseText))
+            } else {
+              reject(new Error(`Error ${xhr.status}: ${xhr.responseText?.substring(0, 100)}`))
+            }
           })
-        } catch (fetchErr) {
-          console.error('Fetch error, trying direct URL:', fetchErr)
-          saveRes = await fetch('https://synccast-repo.vercel.app/api/save-media', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: uploadName,
-              url: result.secure_url,
-              publicId: result.public_id,
-              size: result.bytes,
-              duration: result.duration || null,
-              type: type,
-            }),
-          })
-        }
-        const saveData = await saveRes.json()
+          xhr.addEventListener('error', () => reject(new Error('Error de red')))
+          xhr.open('POST', 'https://synccast-repo.vercel.app/api/upload-proxy')
+          xhr.send(formData)
+        })
 
-        if (saveData.file) {
+        if (result.files && result.files.length > 0) {
           toast.success(`"${file.name}" subido correctamente`)
         } else {
-          toast.error('Error guardando: ' + (saveData.error || 'desconocido'))
+          throw new Error(result.error || 'Error desconocido')
         }
       } catch (e: any) {
-        toast.error(`Error subiendo ${file.name}: ${e.message}`)
+        toast.error(`Error: ${e.message}`)
         console.error('Upload error:', e)
       }
     }
@@ -220,40 +142,6 @@ export function Controller() {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
-  // Direct upload for files < 90MB
-  const uploadDirect = async (file: File, cloudName: string, preset: string, resourceType: string, onProgress: (p: number) => void) => {
-    return new Promise<any>((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-      const formData = new FormData()
-      formData.append('file', fileToUpload)
-      formData.append('upload_preset', preset)
-      formData.append('folder', 'synccast')
-
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          onProgress(Math.round((e.loaded / e.total) * 100))
-        }
-      })
-
-      xhr.addEventListener('load', () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const parsed = JSON.parse(xhr.responseText)
-            if (parsed.secure_url) resolve(parsed)
-            else reject(new Error('Cloudinary no devolvió URL'))
-          } catch (e) {
-            reject(new Error('Error parseando respuesta'))
-          }
-        } else {
-          reject(new Error(`Error ${xhr.status}: ${xhr.responseText?.substring(0, 100)}`))
-        }
-      })
-
-      xhr.addEventListener('error', () => reject(new Error('Error de red')))
-      xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`)
-      xhr.send(formData)
-    })
-  }
 
 
 
@@ -620,10 +508,10 @@ export function Controller() {
               <p className="text-xs text-white/50">
                 Formatos soportados: MP4, WebM, MKV, MOV
               </p>
-              {(uploading || compressing) && uploadProgress >= 0 && (
+              {uploading && uploadProgress >= 0 && (
                 <div className="mt-3 space-y-1">
                   <div className="flex items-center justify-between text-xs text-white/60">
-                    <span>{compressing ? 'Comprimiendo video...' : 'Subiendo a Cloudinary...'}</span>
+                    <span>'Subiendo a Cloudinary...'</span>
                     <span>{uploadProgress}%</span>
                   </div>
                   <div className="h-2 bg-white/10 rounded-full overflow-hidden">
@@ -749,10 +637,10 @@ export function Controller() {
               <p className="text-xs text-white/50">
                 Formatos soportados: MP3, WAV, OGG, M4A, FLAC
               </p>
-              {(uploading || compressing) && uploadProgress >= 0 && (
+              {uploading && uploadProgress >= 0 && (
                 <div className="mt-3 space-y-1">
                   <div className="flex items-center justify-between text-xs text-white/60">
-                    <span>{compressing ? 'Comprimiendo video...' : 'Subiendo a Cloudinary...'}</span>
+                    <span>'Subiendo a Cloudinary...'</span>
                     <span>{uploadProgress}%</span>
                   </div>
                   <div className="h-2 bg-white/10 rounded-full overflow-hidden">
