@@ -35,6 +35,31 @@ export async function POST(req: NextRequest) {
       }, { status: 400 })
     }
     
+    // If it's a Google Drive direct download URL, save it
+    if (url.includes('drive.google.com/uc?export=download')) {
+      const fileName = name || 'Video de Google Drive'
+      
+      const media = await db.mediaFile.create({
+        data: {
+          name: fileName,
+          filename: url,
+          filePath: url,
+          size: 0,
+          mimeType: 'video/mp4',
+          type: 'video',
+        },
+      })
+      
+      return NextResponse.json({
+        file: {
+          id: media.id,
+          name: media.name,
+          url: media.filePath,
+          type: 'video',
+        },
+      })
+    }
+    
     // If it's a direct .mp4 URL (from Terabox download or anywhere else), save it
     const isDirectVideo = url.match(/\.(mp4|webm|mkv|mov|m4v)(\?|$)/i)
     

@@ -827,38 +827,29 @@ export function Controller() {
                       
                       // Convert Google Drive share URL to direct download URL
                       let finalUrl = url
+                      let videoName = null
                       if (isGoogleDrive) {
-                        // Extract file ID from various Google Drive URL formats
-                        const patterns = [
-                          /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/,
-                          /drive\.google\.com\/open\?id=([a-zA-Z0-9_-]+)/,
-                          /drive\.google\.com\/uc\?id=([a-zA-Z0-9_-]+)/,
-                        ]
-                        let fileId = null
-                        for (const pattern of patterns) {
-                          const match = url.match(pattern)
-                          if (match) {
-                            fileId = match[1]
-                            break
-                          }
-                        }
-                        if (fileId) {
-                          // Convert to direct download URL
+                        // Extract file ID from Google Drive URL
+                        // Works with: /file/d/FILE_ID/view, ?id=FILE_ID, /uc?id=FILE_ID
+                        const match = url.match(/[/d=]([a-zA-Z0-9_-]{25,})/)
+                        if (match) {
+                          const fileId = match[1]
                           finalUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
                           console.log('Converted Drive URL:', finalUrl)
+                        } else {
+                          console.log('Could not extract file ID from:', url)
                         }
                       }
                       
-                      // Use the terabox endpoint for terabox, add-url for others
-                      // ALWAYS use direct Vercel URL for reliability
-                      const endpoint = isTerabox ? '/api/terabox' : '/api/add-url'
-                      const fullUrl = `https://synccast-repo.vercel.app${endpoint}`
+                      // Always use the terabox endpoint - it handles all URL types
+                      // (Terabox, Google Drive, direct .mp4, etc.)
+                      const fullUrl = 'https://synccast-repo.vercel.app/api/terabox'
                       
                       console.log('Fetching:', fullUrl)
                       const res = await fetch(fullUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url: finalUrl, type: 'video' }),
+                        body: JSON.stringify({ url: finalUrl, type: 'video', name: videoName }),
                       })
                       console.log('Response status:', res.status)
                       const data = await res.json()
