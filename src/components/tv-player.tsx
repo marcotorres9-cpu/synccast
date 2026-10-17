@@ -47,6 +47,7 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   const ytPlayerRef = useRef<any>(null)
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const playTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -93,14 +94,36 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     }
   }, [loading])
 
-  // Apply volume
+  // Apply volume - runs whenever volume, muted, or media changes
   useEffect(() => {
     const v = muted ? 0 : volume / 100
-    if (videoRef.current) videoRef.current.volume = v
-    if (audioRef.current) audioRef.current.volume = v
-    // Can't control volume of iframe YouTube programmatically
-    // Volume is controlled by the device
-  }, [volume, muted, ytReady])
+    // Apply to video element
+    if (videoRef.current) {
+      videoRef.current.volume = v
+      videoRef.current.muted = muted
+    }
+    // Apply to audio element
+    if (audioRef.current) {
+      audioRef.current.volume = v
+      audioRef.current.muted = muted
+    }
+    console.log('Volume applied:', v, 'muted:', muted)
+  }, [volume, muted, ytReady, mediaInfo.mediaUrl])
+
+  // Also apply volume when video metadata loads
+  useEffect(() => {
+    if (!mediaInfo.mediaUrl || mediaInfo.mediaType === 'youtube') return
+    const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
+    if (!targetEl) return
+    const onLoaded = () => {
+      const v = muted ? 0 : volume / 100
+      targetEl.volume = v
+      targetEl.muted = muted
+      console.log('Volume applied on load:', v)
+    }
+    targetEl.addEventListener('loadedmetadata', onLoaded)
+    return () => targetEl.removeEventListener('loadedmetadata', onLoaded)
+  }, [mediaInfo.mediaUrl, mediaInfo.mediaType, volume, muted])
 
   // Load media effect
   useEffect(() => {
@@ -208,20 +231,34 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncPlay, ytReady])
 
-  // Sync pause
+  // Sync pause - IMPORTANT: cancel any pending play timeout
   useEffect(() => {
     if (!syncPause) return
+    console.log('Pause received:', syncPause)
+
+    // Cancel any pending play timeout (this was the bug!)
+    if (playTimeoutRef.current) {
+      clearTimeout(playTimeoutRef.current)
+      playTimeoutRef.current = null
+      console.log('Cancelled pending play timeout')
+    }
+
     if (mediaInfo.mediaType === 'youtube') {
-      // Can't pause iframe YouTube programmatically
       setIsPlaying(false)
       return
     }
     const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
-    if (!targetEl) return
+    if (!targetEl) {
+      console.log('No target element for pause')
+      return
+    }
     targetEl.pause()
-    targetEl.currentTime = syncPause.position
+    if (syncPause.position !== undefined) {
+      targetEl.currentTime = syncPause.position
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsPlaying(false)
+    console.log('Video paused successfully')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncPause])
 
@@ -259,9 +296,13 @@ export function TvPlayer({ tvId, tvName, onExit }: TvPlayerProps) {
   // Sync stop
   useEffect(() => {
     if (syncStop === null) return
+    // Cancel any pending play timeout
+    if (playTimeoutRef.current) {
+      clearTimeout(playTimeoutRef.current)
+      playTimeoutRef.current = null
+    }
     if (mediaInfo.mediaType === 'youtube') {
       // Can't stop iframe YouTube programmatically
-      // The iframe will be unmounted when mediaInfo changes
     } else {
       const targetEl = mediaInfo.mediaType === 'video' ? videoRef.current : audioRef.current
       if (targetEl) {

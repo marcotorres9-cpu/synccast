@@ -802,11 +802,11 @@ export function Controller() {
             <Card className="glass-card p-4">
               <Label className="text-base font-semibold text-white flex items-center gap-2 mb-3">
                 <LinkIcon className="w-4 h-4 text-primary" />
-                Agregar por URL (Google Drive, Dropbox, etc.)
+                Agregar por URL (Terabox, Google Drive, Dropbox, etc.)
               </Label>
               <div className="space-y-3">
                 <Input
-                  placeholder="https://drive.google.com/... o URL directa .mp4"
+                  placeholder="Pega URL de Terabox, Google Drive, o URL directa .mp4"
                   className="glass border-white/10"
                   value={youtubeUrlInput}
                   onChange={(e) => setYoutubeUrlInput(e.target.value)}
